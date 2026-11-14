@@ -430,6 +430,11 @@ class MainActivity : Activity() {
         val profile = authorProfile
         val viewpoint = pointOfView
         val workspaceId = prefs.getString("active_workspace_id", null)
+        val acceptedHistory = workspaceId?.let {
+            runCatching { WriterWorkspaceStore(this).acceptedHistory(it) }.getOrElse { error ->
+                info("Accepted chapter history unavailable: ${error.message}"); return
+            }
+        } ?: emptyList()
         val characters = cast
         val objective = sceneObjective
         val existingDraft = if (continueExisting) generated else ""
@@ -469,7 +474,7 @@ class MainActivity : Activity() {
                     val state = ChapterContext(
                         project.ifBlank { "Untitled universe" }, series, volume,
                         chapter.ifBlank { "Current chapter" }, brief,
-                        constraints, characters, plan, emptyList(),
+                        constraints, characters, plan, acceptedHistory,
                         AuthoringProfile(name = "Writer profile", style = profile, viewpoint = viewpoint))
                     val instruction = director.makeInstruction(state, goal, text.toString(), text.isNotBlank())
                     withContext(Dispatchers.IO) {
@@ -620,6 +625,16 @@ class MainActivity : Activity() {
                     info("New editable revision created; original preserved") }
                 catch(e: Exception) { info("Fork failed: ${e.message}") }
             }))
+            if (w.approved) {
+                group(label("Accepted consequence: " + w.acceptedOutcome, 12f, muted))
+                group(button("Create next chapter in this series", {
+                    if (busy) { info("Stop generation before changing chapters"); return@button }
+                    try {
+                        restoreWorkspace(store.nextChapter(w.id)); tab = 0; build()
+                        info("Next chapter created with accepted continuity")
+                    } catch (e: Exception) { info("Next chapter unavailable: ${e.message}") }
+                }))
+            }
             if (w.id == prefs.getString("active_workspace_id", null)) {
                 group(label("Stored revisions: " + store.revisions(w.id).size, 12f, muted))
             }
@@ -683,13 +698,16 @@ class MainActivity : Activity() {
                 val id = workspace?.id ?: error("Save the chapter to a project before approving")
                 if (issues.any { it == "SHORT_DRAFT" || it == "REPEATED_PARAGRAPH" ||
                         it == "REPEATED_SCENE_START" }) error("Resolve blocking structural findings first")
+                val outcomeInput = field("", 4,
+                    "What actually changed? Decisions, knowledge, timeline and consequences")
                 android.app.AlertDialog.Builder(this)
-                    .setTitle("Approve chapter?")
-                    .setMessage("Locks the local manuscript and establishes editorial acceptance. This does NOT publish to Nexus.")
-                    .setPositiveButton("Approve") { _, _ ->
+                    .setTitle("Accept this chapter's consequences")
+                    .setMessage("Record the real outcome. It will govern subsequent chapters. This does not publish to Nexus.")
+                    .setView(outcomeInput)
+                    .setPositiveButton("Approve and lock") { _, _ ->
                         try {
-                            WriterWorkspaceStore(this).approve(id)
-                            info("Chapter accepted and locked; fork a revision to make changes")
+                            WriterWorkspaceStore(this).approve(id, outcomeInput.text.toString())
+                            info("Chapter accepted; subsequent chapters inherit its outcome")
                             build()
                         } catch (e: Exception) { info("Approval failed: ${e.message}") }
                     }.setNegativeButton("Cancel", null).show()
