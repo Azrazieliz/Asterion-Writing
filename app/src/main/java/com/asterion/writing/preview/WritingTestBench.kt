@@ -70,11 +70,27 @@ object WritingTestBench {
         file.writeText(text, Charsets.UTF_8)
     }
 
+    fun deviceMetrics(context: Context): JSONObject {
+        val activity = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val memory = android.app.ActivityManager.MemoryInfo()
+        activity.getMemoryInfo(memory)
+        val battery = context.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
+        val thermal = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        return JSONObject()
+            .put("available_ram_bytes", memory.availMem)
+            .put("total_ram_bytes", memory.totalMem)
+            .put("low_memory", memory.lowMemory)
+            .put("battery_percent", battery.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY))
+            .put("thermal_status", thermal.currentThermalStatus)
+            .put("sampled_at_ms", System.currentTimeMillis())
+    }
+
     /** A run is stored privately, never in a public GitHub repository or remote inference service. */
     fun saveRun(
         context: Context, model: String, brief: String, text: String, sampling: WritingSampling,
         contextTokens: Int, newTokensPerPass: Int, segments: Int, elapsedMs: Long,
-        firstTextMs: Long, streamChunks: Int, status: String, findings: Int
+        firstTextMs: Long, streamChunks: Int, status: String, findings: Int,
+        startMetrics: JSONObject? = null
     ): JSONObject {
         val folder = File(context.filesDir, "writing-tests").apply { mkdirs() }
         val id = System.currentTimeMillis().toString()
@@ -90,6 +106,9 @@ object WritingTestBench {
             .put("characters", text.length).put("structural_flags", findings)
             .put("brief_sha256", sha(brief)).put("output_sha256", sha(text))
             .put("chars_per_sec", if (elapsedMs > 0) text.length * 1000.0 / elapsedMs else 0.0)
+            .put("backend", "CPU") // Native backend selected by this pilot's inherited engine
+            .put("device_start", startMetrics)
+            .put("device_end", deviceMetrics(context))
         File(folder, "results.jsonl").appendText(obj.toString() + "\n", Charsets.UTF_8)
         return obj
     }
