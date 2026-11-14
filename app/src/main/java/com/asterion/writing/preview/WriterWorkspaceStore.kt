@@ -21,6 +21,9 @@ data class WriterWorkspace(
     val sceneObjective: String,
     val chapterPlan: String,
     val profile: String,
+    val parentChapterId: String = "",
+    val chapterIndex: Int = 1,
+    val acceptedOutcome: String = "",
     val approved: Boolean = false,
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -45,12 +48,16 @@ class WriterWorkspaceStore(private val context: Context) {
         .put("volume", w.volume).put("chapter", w.chapter).put("premise", w.premise)
         .put("cast", w.cast).put("canon", w.canon).put("sceneObjective", w.sceneObjective)
         .put("chapterPlan", w.chapterPlan).put("profile", w.profile)
+        .put("parentChapterId", w.parentChapterId)
+        .put("chapterIndex", w.chapterIndex).put("acceptedOutcome", w.acceptedOutcome)
         .put("approved", w.approved).put("updatedAt", w.updatedAt)
     private fun parse(j: JSONObject): WriterWorkspace = WriterWorkspace(
         j.getString("id"), j.optString("universe"), j.optString("series"),
         j.optString("volume"), j.optString("chapter"), j.optString("premise"),
         j.optString("cast"), j.optString("canon"), j.optString("sceneObjective"),
         j.optString("chapterPlan"), j.optString("profile"),
+        j.optString("parentChapterId"), j.optInt("chapterIndex", 1),
+        j.optString("acceptedOutcome"),
         j.optBoolean("approved"), j.optLong("updatedAt"))
     @Synchronized fun list(): List<WriterWorkspace> {
         if (!index.isFile) return emptyList()
@@ -62,13 +69,15 @@ class WriterWorkspaceStore(private val context: Context) {
     @Synchronized fun create(
         universe: String, series: String, volume: String, chapter: String,
         premise: String, cast: String, canon: String, objective: String,
-        plan: String = "", profile: String = ""
+        plan: String = "", profile: String = "",
+        parentChapterId: String = "", chapterIndex: Int = 1
     ): WriterWorkspace {
         require(universe.isNotBlank() && chapter.isNotBlank() && premise.isNotBlank()) {
             "Enter a universe, chapter title and original premise"
         }
+        require(chapterIndex >= 1)
         val w = WriterWorkspace(UUID.randomUUID().toString(), universe, series, volume, chapter,
-            premise, cast, canon, objective, plan, profile)
+            premise, cast, canon, objective, plan, profile, parentChapterId, chapterIndex)
         val others = list().toMutableList()
         others += w
         atomicallyWrite(index, JSONArray(others.map { json(it) }).toString().toByteArray(Charsets.UTF_8))
@@ -117,16 +126,45 @@ class WriterWorkspaceStore(private val context: Context) {
             ?.filter { it.isFile && it.extension == "txt" }?.sortedByDescending { it.name } ?: emptyList()
     }
     /** Explicit local editorial lock. Publication to Nexus requires a separate real adapter and receipt. */
-    @Synchronized fun approve(id: String): WriterWorkspace {
+    @Synchronized fun approve(id: String, acceptedOutcome: String): WriterWorkspace {
         val w = requireNotNull(get(id))
         require(draft(id).trim().isNotEmpty()) { "Cannot approve an empty chapter" }
-        return update(w.copy(approved = true))
+        require(acceptedOutcome.isNotBlank()) { "Record the accepted chapter outcome first" }
+        return update(w.copy(approved = true, acceptedOutcome = acceptedOutcome))
+    }
+    /** Returns only explicitly accepted prior outcomes. Detects broken chains and cycles. */
+    @Synchronized fun acceptedHistory(id: String): List<String> {
+        val seen = mutableSetOf<String>()
+        val outcomes = mutableListOf<String>()
+        var current = get(id)
+        while (current?.parentChapterId?.isNotBlank() == true) {
+            require(seen.add(current.id)) { "Chapter chain contains a cycle" }
+            val parent = requireNotNull(get(current.parentChapterId)) { "Missing previous chapter" }
+            require(parent.approved && parent.acceptedOutcome.isNotBlank()) {
+                "Previous chapter needs accepted editorial outcome"
+            }
+            outcomes += "Chapter ${parent.chapterIndex} — ${parent.acceptedOutcome}"
+            current = parent
+        }
+        return outcomes.asReversed()
+    }
+    @Synchronized fun nextChapter(id: String): WriterWorkspace {
+        val w = requireNotNull(get(id))
+        require(w.approved && w.acceptedOutcome.isNotBlank()) {
+            "Approve the previous chapter and its consequences before continuing the series"
+        }
+        val next = create(w.universe, w.series, w.volume,
+            "Chapter ${w.chapterIndex + 1}", w.premise, w.cast,
+            w.canon + "\nAccepted chapter ${w.chapterIndex} consequence: " + w.acceptedOutcome,
+            "Advance the next conflict", w.chapterPlan, w.profile, w.id, w.chapterIndex + 1)
+        return next
     }
     @Synchronized fun fork(id: String): WriterWorkspace {
         val original = requireNotNull(get(id))
         val next = create(original.universe, original.series, original.volume,
             original.chapter + " — revision", original.premise, original.cast,
-            original.canon, original.sceneObjective, original.chapterPlan, original.profile)
+            original.canon, original.sceneObjective, original.chapterPlan, original.profile,
+            original.parentChapterId, original.chapterIndex)
         autosave(next.id, draft(id))
         return next
     }
