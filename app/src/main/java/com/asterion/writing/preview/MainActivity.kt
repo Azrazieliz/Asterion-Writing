@@ -452,7 +452,7 @@ class MainActivity : Activity() {
                 val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
                 val mem = ActivityManager.MemoryInfo(); manager.getMemoryInfo(mem)
                 // Avoid likely OOM from weight files larger than the currently available budget.
-                require(mem.availMem > file.length() + 450_000_000L) { "Not enough available RAM (${mem.availMem/1e9} GB) to load this model safely" }
+                require(mem.availMem > file.length() + (adapterPath?.length() ?: 0L) + 500_000_000L) { "Not enough available RAM (${mem.availMem/1e9} GB) to load this model safely" }
                 withContext(Dispatchers.IO) {
                     engine?.let { existing ->
                         if (loaded != null) { existing.cleanUp(); loaded = null }
@@ -460,13 +460,21 @@ class MainActivity : Activity() {
                     val candidate = AiChat.getInferenceEngine(this@MainActivity)
                     candidate.state.first { it is InferenceEngine.State.Initialized || it is InferenceEngine.State.Error }
                     require(candidate.state.value is InferenceEngine.State.Initialized) { "Native engine failed to initialize" }
-                    candidate.loadModel(file.absolutePath, contextCap)
-                    if (adapterPath != null) {
-                        require(adapterPath.isFile) { "Selected GGUF LoRA adapter is unavailable" }
-                        candidate.loadAdapter(adapterPath.absolutePath)
+                    try {
+                        candidate.loadModel(file.absolutePath, contextCap)
+                        if (adapterPath != null) {
+                            require(adapterPath.isFile) { "Selected GGUF LoRA adapter is unavailable" }
+                            candidate.loadAdapter(adapterPath.absolutePath)
+                        }
+                        candidate.setSystemPrompt(WritingTestBench.SYSTEM_PROMPT)
+                        engine = candidate
+                    } catch (failure: Throwable) {
+                        runCatching { candidate.cleanUp() }
+                        engine = null
+                        loaded = null
+                        activeAdapter = null
+                        throw failure
                     }
-                    candidate.setSystemPrompt(WritingTestBench.SYSTEM_PROMPT)
-                    engine = candidate
                 }
                 loaded = file.name
                 activeAdapter = adapterName.takeIf { it.isNotBlank() }
