@@ -60,6 +60,7 @@ class MainActivity : Activity() {
     private var authorProfile = ""
     private var pointOfView = ""
     private var editorGuidance = ""
+    private var creationMode = "Chapter prose"
     private var cast = ""
     private var sceneObjective = ""
     private var downloadProgressView: ProgressBar? = null
@@ -86,6 +87,7 @@ class MainActivity : Activity() {
         authorProfile = prefs.getString("author_profile", "") ?: ""
         pointOfView = prefs.getString("point_of_view", "") ?: ""
         editorGuidance = prefs.getString("editor_guidance", "") ?: ""
+        creationMode = prefs.getString("creative_mode", "Chapter prose") ?: "Chapter prose"
         cast = prefs.getString("cast", "") ?: ""
         sceneObjective = prefs.getString("scene_objective", "") ?: ""
         tokenCap = prefs.getInt("token_cap", 1280)
@@ -270,6 +272,26 @@ class MainActivity : Activity() {
             }
         }
         group(parts)
+        group(label("CREATIVE MODE", 14f, mint, true))
+        val creativeModes = listOf(
+            "Chapter prose", "Worldbuilding notes", "Character arcs",
+            "Volume outline", "Continuity critique"
+        )
+        val modeSpinner = Spinner(this)
+        modeSpinner.adapter = spinnerAdapter(creativeModes)
+        modeSpinner.setSelection(creativeModes.indexOf(creationMode).coerceAtLeast(0))
+        modeSpinner.onItemSelectedListener = object: android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                creationMode = creativeModes[pos]
+                prefs.edit().putString("creative_mode", creationMode).apply()
+            }
+        }
+        group(modeSpinner)
+        group(label("The selected mode executes a real model task. Proposed world/character/plot changes require your approval.", 12f, muted))
+        group(button("Generate with selected mode", {
+            if (creationMode == "Chapter prose") generate(false) else generateCreativeMode()
+        }, true))
         group(label("GENERATION CONTROLS", 14f, mint, true))
         group(button("Start new chapter · preserve old draft", { generate(false) }, true))
         group(button("Continue chapter from saved text", { generate(true) }))
@@ -498,7 +520,7 @@ class MainActivity : Activity() {
         if (prompt.isBlank()) { info("Enter a story brief first"); return }
         val sampling = try { WritingSampling.from(prefs) }
             catch(e: Exception) { info("Sampler settings invalid: " + e.message); return }
-        val trialModel = loaded!!
+        val trialModel = loaded!! + (activeAdapter?.let { "::LoRA::$it" } ?: "")
         val brief = prompt
         val constraints = canon
         val project = projectTitle
@@ -750,6 +772,72 @@ class MainActivity : Activity() {
                 } catch (e: Exception) { info("Edit was not saved: ${e.message}") }
             }
             .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun generateCreativeMode() {
+        val active = engine
+        if (loaded == null || active == null) { info("Load a compatible local GGUF model"); return }
+        if (busy) { info("An operation is already running"); return }
+        val mode = creationMode
+        if (mode == "Chapter prose") { generate(false); return }
+        if (prompt.isBlank()) { info("Define your original universe premise first"); return }
+        val sampling = try { WritingSampling.from(prefs) }
+        catch(e: Exception) { info("Sampler settings invalid: ${e.message}"); return }
+        val task = when (mode) {
+            "Worldbuilding notes" -> "Develop original world mechanics, social consequences, history, cultures, limitations and new conflicts. Propose notes; do not write chapter prose."
+            "Character arcs" -> "Develop distinct original character motivations, secrets, contradictions, relationship dynamics and believable changes. Propose notes, not chapter prose."
+            "Volume outline" -> "Develop a multi-chapter volume arc with cause/effect, varied pacing, turning points and consequences. Avoid generic filler and plagiarism."
+            "Continuity critique" -> "Critically review established canon, recent manuscript, character knowledge, chronology, decision causes and inconsistencies. Flag uncertainty instead of inventing facts."
+            else -> error("Unknown creative mode")
+        }
+        val request = "CREATIVE MODE: " + mode + "\n" + task +
+            "\nUniverse: " + projectTitle + "\nSeries: " + seriesTitle +
+            "\nVolume: " + volumeTitle + "\nCurrent chapter: " + chapterTitle +
+            "\nPremise: " + prompt +
+            "\nExisting canon: " + canon.takeLast(5000) +
+            "\nExisting cast: " + cast.takeLast(3500) +
+            "\nCurrent outline: " + chapterPlan.takeLast(2500) +
+            "\nCurrent manuscript excerpt: " + generated.takeLast(2500) +
+            "\nDo not assert new material is established until reviewed by the author."
+        busy = true
+        generation = scope.launch {
+            val note = StringBuilder()
+            var problem: String? = null
+            try {
+                withContext(Dispatchers.IO) {
+                    active.configureSampler(sampling.temperature, sampling.topP, sampling.minP,
+                        sampling.repetition, sampling.seed)
+                    active.resetSession(WritingTestBench.SYSTEM_PROMPT)
+                }
+                active.sendUserPrompt(request, minOf(tokenCap, 1280)).collect { piece -> note.append(piece) }
+            } catch (e: CancellationException) { problem = "Cancelled" }
+              catch (e: Throwable) { problem = e.message ?: e.javaClass.simpleName }
+              finally { busy = false }
+            if (problem != null) { info("$mode: $problem"); return@launch }
+            val proposed = note.toString().trim()
+            if (proposed.isBlank()) { info("Model returned no content"); return@launch }
+            val view = label(proposed, 14f).apply { setTextIsSelectable(true) }
+            val acceptTitle = if (mode == "Continuity critique") "Close critique" else "Accept into project"
+            val dialog = android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle("$mode — review")
+                .setView(ScrollView(this@MainActivity).apply {
+                    setPadding(dp(18), dp(8), dp(18), dp(8)); addView(view)
+                })
+                .setNegativeButton("Discard", null)
+            dialog.setPositiveButton(acceptTitle) { _, _ ->
+                if (mode == "Continuity critique") return@setPositiveButton
+                when (mode) {
+                    "Worldbuilding notes" -> canon += "\n" + proposed
+                    "Character arcs" -> cast += "\n" + proposed
+                    "Volume outline" -> chapterPlan += "\n" + proposed
+                }
+                prefs.edit().putString("canon", canon).putString("cast", cast)
+                    .putString("chapter_plan", chapterPlan).apply()
+                // Saving never approves or publishes: even model-generated notes stay provisional.
+                saveCurrentWorkspace()
+                tab = 0; build()
+            }.show()
+        }
     }
 
     private fun rewritePassage() {
