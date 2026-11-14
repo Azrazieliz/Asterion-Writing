@@ -46,7 +46,13 @@ class MainActivity : Activity() {
     private var generated = ""
     private var tokenCap = 768
     private var contextCap = 4096
-    private var segments = 1
+    private var segments = 4
+    private var projectTitle = ""
+    private var chapterTitle = ""
+    private var cast = ""
+    private var sceneObjective = ""
+    private var downloadProgressView: ProgressBar? = null
+    private var resumeDownloadButton: Button? = null
     private var showSampler = false
     private var selectedFile: ModelFile? = null
     private var files: List<ModelFile> = emptyList()
@@ -60,15 +66,24 @@ class MainActivity : Activity() {
         window.statusBarColor = bg; window.navigationBarColor = bg
         prompt = prefs.getString("prompt", prompt) ?: prompt
         canon = prefs.getString("canon", "") ?: ""
-        generated = prefs.getString("generated", "") ?: ""
-        tokenCap = prefs.getInt("token_cap", 768)
+        generated = WritingTestBench.readCheckpoint(this).ifBlank { prefs.getString("generated", "") ?: "" }
+        projectTitle = prefs.getString("project_title", "") ?: ""
+        chapterTitle = prefs.getString("chapter_title", "") ?: ""
+        cast = prefs.getString("cast", "") ?: ""
+        sceneObjective = prefs.getString("scene_objective", "") ?: ""
+        tokenCap = prefs.getInt("token_cap", 1280)
         contextCap = prefs.getInt("context_cap", 4096)
-        segments = prefs.getInt("segments", 1)
+        segments = prefs.getInt("segments", 4)
         build()
         handler.post(object: Runnable {
             override fun run() {
                 if (!isFinishing) {
-                    if (tab == 1) statusView?.text = prefs.getString(ModelDownloadService.KEY_STATUS, "No active download")
+                    if (tab == 1) {
+                        statusView?.text = prefs.getString(ModelDownloadService.KEY_STATUS, "No active download")
+                        downloadProgressView?.progress = prefs.getInt(ModelDownloadService.KEY_PROGRESS, 0)
+                        resumeDownloadButton?.isEnabled = ModelDownloadService.resumable(this@MainActivity) &&
+                            !prefs.getBoolean(ModelDownloadService.KEY_ACTIVE, false)
+                    }
                     handler.postDelayed(this, 900)
                 }
             }
@@ -89,23 +104,42 @@ class MainActivity : Activity() {
     }
     private fun button(value: String, action: () -> Unit, primary: Boolean = false): Button {
         val b = Button(this); b.text = value; b.isAllCaps = false; b.textSize = 13.5f
-        b.setTextColor(if (primary) bg else white); b.setBackgroundTintList(android.content.res.ColorStateList.valueOf(if (primary) mint else panel))
+        b.setTextColor(if (primary) bg else white)
+        b.background = android.graphics.drawable.GradientDrawable().apply {
+            setColor(if (primary) mint else panel)
+            cornerRadius = dp(14).toFloat()
+            if (!primary) setStroke(dp(1), Color.rgb(51, 67, 84))
+        }
+        b.minHeight = dp(46); b.setPadding(dp(12), dp(9), dp(12), dp(9))
         b.setOnClickListener { action() }; return b
     }
-    private fun group(v: View, margins: Int = 6) {
+    private fun spinnerAdapter(items: List<String>): ArrayAdapter<String> =
+        object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, items) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+                (super.getView(position, convertView, parent) as TextView).apply {
+                    setTextColor(white); setBackgroundColor(panel)
+                    setPadding(dp(12), dp(13), dp(12), dp(13))
+                }
+            override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View =
+                (super.getDropDownView(position, convertView, parent) as TextView).apply {
+                    setTextColor(white); setBackgroundColor(panel)
+                    setPadding(dp(12), dp(15), dp(12), dp(15))
+                }
+        }
+    private fun group(v: View, margins: Int = 9) {
         val p = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         p.setMargins(0, dp(margins), 0, dp(margins)); content.addView(v, p)
     }
     private fun build() {
         val outer = LinearLayout(this); outer.orientation = LinearLayout.VERTICAL; outer.setBackgroundColor(bg)
         val header = LinearLayout(this); header.orientation = LinearLayout.VERTICAL; header.setPadding(dp(20), dp(12), dp(20), dp(4))
-        header.addView(label("ASTERION / WRITING", 20f, mint, true))
-        header.addView(label("Private on-device fiction test · no cloud inference", 12f, muted))
+        header.addView(label("ASTERION  /  WRITER", 23f, mint, true))
+        header.addView(label("LOCAL FICTION STUDIO  ·  REAL MODEL INFERENCE", 11f, muted))
         outer.addView(header)
         val nav = LinearLayout(this); nav.setPadding(dp(12), 0, dp(12), 0)
-        val w = button("WRITER", { tab = 0; build() }, tab == 0)
+        val w = button("STUDIO", { tab = 0; build() }, tab == 0)
         val m = button("MODELS", { tab = 1; build() }, tab == 1)
-        val r = button("RESULTS", { tab = 2; build() }, tab == 2)
+        val r = button("REVIEWS", { tab = 2; build() }, tab == 2)
         nav.addView(w, LinearLayout.LayoutParams(0, dp(52), 1f)); nav.addView(m, LinearLayout.LayoutParams(0, dp(52), 1f))
         nav.addView(r, LinearLayout.LayoutParams(0, dp(52), 1f))
         outer.addView(nav)
@@ -116,16 +150,31 @@ class MainActivity : Activity() {
         when(tab) { 0 -> writerPage(); 1 -> modelPage(); else -> resultsPage() }
     }
     private fun writerPage() {
-        group(label("STORY TEST BENCH", 17f, white, true))
-        group(label("Real generation from one installed GGUF. Each trial is an independently reviewable draft; Nexus will own the library and reading experience.", 13f, muted))
+        group(label("CHAPTER STUDIO", 18f, white, true))
+        group(label("Write a real chapter with scene continuity and recoverable drafts. Tests remain private; Nexus integration is not yet connected.", 13f, muted))
+        group(label("STORY PROJECT", 14f, mint, true))
+        val projectInput = field(projectTitle, 1, "Universe / series title")
+        projectInput.addTextChangedListener(watcher { projectTitle = it; prefs.edit().putString("project_title", it).apply() })
+        group(projectInput)
+        val chapterInput = field(chapterTitle, 1, "Volume and chapter title")
+        chapterInput.addTextChangedListener(watcher { chapterTitle = it; prefs.edit().putString("chapter_title", it).apply() })
+        group(chapterInput)
+        group(label("CHARACTERS & RELATIONSHIPS", 14f, mint, true))
+        val castInput = field(cast, 3, "Characters, motivations, secrets, relationships")
+        castInput.addTextChangedListener(watcher { cast = it; prefs.edit().putString("cast", it).apply() })
+        group(castInput)
+        group(label("CURRENT SCENE OBJECTIVE", 14f, mint, true))
+        val objectiveInput = field(sceneObjective, 3, "What changes in this scene? Decision, conflict, consequence")
+        objectiveInput.addTextChangedListener(watcher { sceneObjective = it; prefs.edit().putString("scene_objective", it).apply() })
+        group(objectiveInput)
         val model = loaded ?: "No model loaded"
         group(label("Active model: $model", 13f, if (loaded == null) muted else mint))
         group(button("Manage or load models", { tab = 1; build() }))
         group(button("Use standardized A/B story test", { prompt = WritingTestBench.STANDARD_BRIEF; prefs.edit().putString("prompt", prompt).apply(); build() }))
-        group(label("Story brief", 14f, white, true))
+        group(label("PREMISE & WRITING DIRECTION", 14f, mint, true))
         val promptInput = field(prompt, 5)
         promptInput.addTextChangedListener(watcher { prompt = it; prefs.edit().putString("prompt", it).apply() }); group(promptInput)
-        group(label("Canon / constraints (optional)", 14f, white, true))
+        group(label("ESTABLISHED CANON / CONTINUITY", 14f, mint, true))
         val canonInput = field(canon, 3, "World rules, established characters, what must stay consistent")
         canonInput.addTextChangedListener(watcher { canon = it; prefs.edit().putString("canon", it).apply() }); group(canonInput)
         group(button(if (showSampler) "Hide sampler parameters" else "Edit native sampler parameters", {
@@ -148,7 +197,7 @@ class MainActivity : Activity() {
         group(label("Context window (applies on next model load)", 13f, muted))
         val windows = listOf(4096, 8192)
         val contextChoice = Spinner(this)
-        contextChoice.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, windows.map { it.toString() + " tokens" })
+        contextChoice.adapter = spinnerAdapter(windows.map { it.toString() + " tokens" })
         contextChoice.setSelection(windows.indexOf(contextCap).coerceAtLeast(0))
         contextChoice.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
@@ -160,7 +209,7 @@ class MainActivity : Activity() {
         group(label("Output tokens per scene segment", 13f, muted))
         val tok = Spinner(this)
         val choices = listOf(384, 768, 1280, 2048)
-        tok.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, choices.map { "$it tokens" })
+        tok.adapter = spinnerAdapter(choices.map { "$it tokens" })
         tok.setSelection(choices.indexOf(tokenCap).coerceAtLeast(0))
         tok.onItemSelectedListener = object: android.widget.AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
@@ -169,8 +218,7 @@ class MainActivity : Activity() {
         group(label("Segments per run (1 for A/B; 2–8 for chapter experiments)", 13f, muted))
         val segmentCounts = listOf(1, 2, 4, 8)
         val parts = Spinner(this)
-        parts.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
-            segmentCounts.map { it.toString() + " segment(s)" })
+        parts.adapter = spinnerAdapter(segmentCounts.map { it.toString() + " segment(s)" })
         parts.setSelection(segmentCounts.indexOf(segments).coerceAtLeast(0))
         parts.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
@@ -179,9 +227,12 @@ class MainActivity : Activity() {
             }
         }
         group(parts)
-        group(button("Generate original fiction", { generate() }, true))
-        group(button("Stop generation", { generation?.cancel(); info("Generation stopped; the existing text remains saved.") }))
-        group(label("DRAFT / LIVE OUTPUT", 17f, white, true))
+        group(label("GENERATION CONTROLS", 14f, mint, true))
+        group(button("Start new chapter · preserve old draft", { generate(false) }, true))
+        group(button("Continue chapter from saved text", { generate(true) }))
+        group(button("Stop after current token", { generation?.cancel(); info("Stopping; draft checkpoint will be preserved.") }))
+        group(label("LIVE CHAPTER DRAFT", 18f, white, true))
+        group(label("Continuations append to the saved draft; they do not reproduce hidden model state or pretend to resume mid-token.", 12f, muted))
         outputView = label(generated.ifBlank { "Your generated prose will appear here. No synthetic sample text is displayed." }, 15f)
         outputView!!.setTextIsSelectable(true); group(outputView!!)
         group(button("Share draft / send to Nexus", { shareDraft() }))
@@ -191,7 +242,7 @@ class MainActivity : Activity() {
         group(label("HUGGING FACE / DIRECT INSTALL", 17f, white, true))
         group(label("Choose a verified public GGUF repository or enter any Hugging Face owner/model. Download, resume and verify directly in this app.", 13f, muted))
         val names = HuggingFaceCatalog.presets.keys.toList()
-        val preset = Spinner(this); preset.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
+        val preset = Spinner(this); preset.adapter = spinnerAdapter(names)
         group(preset)
         group(button("Use selected model", { repoText?.setText(HuggingFaceCatalog.presets[names[preset.selectedItemPosition]]) }))
         group(label("Hugging Face repository", 13f, muted))
@@ -207,7 +258,7 @@ class MainActivity : Activity() {
         if (files.isNotEmpty()) {
             group(label("SELECT QUANTIZATION", 14f, white, true))
             val fileSpin = Spinner(this)
-            fileSpin.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, files.map { it.label })
+            fileSpin.adapter = spinnerAdapter(files.map { it.label })
             fileSpin.onItemSelectedListener = object: android.widget.AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
                 override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) { selectedFile = files[pos] }
@@ -225,13 +276,27 @@ class MainActivity : Activity() {
         }
         statusView = label(prefs.getString(ModelDownloadService.KEY_STATUS, "No active download") ?: "No active download", 13f, mint)
         group(statusView!!)
-        group(button("Pause current download", { ModelDownloadService.cancel(this); info("Pause requested; download can resume later") }))
+        downloadProgressView = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = prefs.getInt(ModelDownloadService.KEY_PROGRESS, 0)
+            progressTintList = android.content.res.ColorStateList.valueOf(mint)
+        }
+        group(downloadProgressView!!)
+        group(button("Pause active download", { ModelDownloadService.cancel(this); info("Pause requested; transfer position is retained.") }))
+        resumeDownloadButton = button("Resume interrupted download", {
+            if (ModelDownloadService.resume(this)) info("Resuming saved GGUF from its partial file")
+            else info("No resumable GGUF file was found")
+        }, true)
+        resumeDownloadButton!!.isEnabled = ModelDownloadService.resumable(this) &&
+            !prefs.getBoolean(ModelDownloadService.KEY_ACTIVE, false)
+        group(resumeDownloadButton!!)
+        group(label("The resume action uses the actual saved download, even after restarting this screen.", 12f, muted))
         group(label("LOCAL MODELS", 17f, white, true))
         val local = ModelDownloadService.modelsDir(this).listFiles()?.filter { it.extension.equals("gguf", true) }?.sortedBy { it.name } ?: emptyList()
         if (local.isEmpty()) group(label("No installed GGUF model yet", 13f, muted))
         else {
             modelList = Spinner(this)
-            modelList!!.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, local.map { "${it.name} • ${"%.2f".format(it.length()/1e9)} GB" })
+            modelList!!.adapter = spinnerAdapter(local.map { "${it.name} • ${"%.2f".format(it.length()/1e9)} GB" })
             group(modelList!!)
             group(button("Load selected model", {
                 val file = local.getOrNull(modelList!!.selectedItemPosition) ?: return@button
@@ -293,7 +358,7 @@ class MainActivity : Activity() {
         scope.launch { busy = true; try { withContext(Dispatchers.IO) { engine?.cleanUp() }; loaded = null; info("Model unloaded"); build() }
             catch(e: Throwable) { info("Unload error: ${e.message}") } finally { busy = false } }
     }
-    private fun generate() {
+    private fun generate(continueExisting: Boolean) {
         val active = engine
         if (loaded == null || active == null) { info("Load a GGUF model from Models first"); return }
         if (busy) { info("A generation is already running"); return }
@@ -303,15 +368,24 @@ class MainActivity : Activity() {
         val trialModel = loaded!!
         val brief = prompt
         val constraints = canon
+        val project = projectTitle
+        val chapter = chapterTitle
+        val characters = cast
+        val objective = sceneObjective
+        val existingDraft = if (continueExisting) generated else ""
+        if (continueExisting && existingDraft.isBlank()) {
+            info("No saved chapter to continue"); return
+        }
+        if (!continueExisting && generated.isNotBlank()) WritingTestBench.archiveDraft(this, generated)
         val passCount = segments
         val cap = tokenCap
         val ctx = contextCap
         busy = true
-        generated = ""
-        outputView?.text = "Running real native inference…"
+        generated = existingDraft
+        outputView?.text = if (continueExisting) "Continuing saved chapter…" else "Running real native inference…"
         val started = SystemClock.elapsedRealtime()
         generation = scope.launch {
-            val text = StringBuilder()
+            val text = StringBuilder(existingDraft)
             var firstTextMs = -1L
             var chunks = 0
             var lastUi = 0L
@@ -321,17 +395,20 @@ class MainActivity : Activity() {
             var problem: String? = null
             try {
                 repeat(passCount) { section ->
-                    val instruction = if(section == 0) {
-                        "Original fiction task:\n" + brief + "\n\nCanon:\n" +
-                        constraints.ifBlank { "None established." } +
-                        "\n\nBegin directly in-scene. Write only the actual story."
+                    val storyState = "Project: " + project.ifBlank { "Untitled" } +
+                        "\nChapter: " + chapter.ifBlank { "Current chapter" } +
+                        "\nCast and relationships: " + characters.ifBlank { "Establish in prose." } +
+                        "\nScene objective: " + objective.ifBlank { "Advance an irreversible choice." } +
+                        "\nPremise: " + brief +
+                        "\nCanon: " + constraints.ifBlank { "None established." }
+                    val instruction = if (text.isEmpty()) {
+                        "Write the opening scene of this original chapter.\n" + storyState +
+                        "\nBegin with meaningful action and natural dialogue; write only prose."
                     } else {
-                        "Continue this SAME original chapter with new prose. Do not repeat or paraphrase " +
-                        "earlier sentences. Advance character decisions, action and consequences.\n" +
-                        "Original plan:\n" + brief + "\n\nCanon:\n" +
-                        constraints.ifBlank { "None established." } +
-                        "\n\nMost recent written paragraphs (for continuity only):\n" +
-                        text.toString().takeLast(1800) + "\n\nContinue immediately, no recap."
+                        "Continue this SAME original chapter with NEW prose. Do not repeat, summarize or paraphrase " +
+                        "previous paragraphs. Progress the scene goal, character choices, relationships and consequences.\n" +
+                        storyState + "\nPrevious prose for continuity (not to repeat):\n" +
+                        text.toString().takeLast(3000) + "\nContinue immediately without a recap."
                     }
                     withContext(Dispatchers.IO) {
                         active.configureSampler(sampling.temperature, sampling.topP, sampling.minP,
