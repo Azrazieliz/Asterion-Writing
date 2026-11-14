@@ -82,7 +82,7 @@ class MainActivity : Activity() {
                         statusView?.text = prefs.getString(ModelDownloadService.KEY_STATUS, "No active download")
                         downloadProgressView?.progress = prefs.getInt(ModelDownloadService.KEY_PROGRESS, 0)
                         resumeDownloadButton?.isEnabled = ModelDownloadService.resumable(this@MainActivity) &&
-                            !prefs.getBoolean(ModelDownloadService.KEY_ACTIVE, false)
+                            !ModelDownloadService.isRunning()
                     }
                     handler.postDelayed(this, 900)
                 }
@@ -288,7 +288,7 @@ class MainActivity : Activity() {
             else info("No resumable GGUF file was found")
         }, true)
         resumeDownloadButton!!.isEnabled = ModelDownloadService.resumable(this) &&
-            !prefs.getBoolean(ModelDownloadService.KEY_ACTIVE, false)
+            !ModelDownloadService.isRunning()
         group(resumeDownloadButton!!)
         group(label("The resume action uses the actual saved download, even after restarting this screen.", 12f, muted))
         group(label("LOCAL MODELS", 17f, white, true))
