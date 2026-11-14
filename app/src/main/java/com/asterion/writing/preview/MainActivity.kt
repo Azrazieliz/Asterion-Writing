@@ -453,6 +453,7 @@ class MainActivity : Activity() {
         generated = existingDraft
         outputView?.text = if (continueExisting) "Continuing saved chapter…" else "Running real native inference…"
         val started = SystemClock.elapsedRealtime()
+        val startMetrics = WritingTestBench.deviceMetrics(this)
         generation = scope.launch {
             val text = StringBuilder(existingDraft)
             if (existingDraft.isNotBlank()) text.append("\n\n")
@@ -530,7 +531,8 @@ class MainActivity : Activity() {
                     WritingTestBench.checkpoint(this@MainActivity, generated)
                     if (workspaceId != null) WriterWorkspaceStore(this@MainActivity).autosave(workspaceId, generated)
                     WritingTestBench.saveRun(this@MainActivity, trialModel, brief, generated, sampling,
-                        ctx, cap, finishedSegments, elapsed, firstTextMs, chunks, status, flags)
+                        ctx, cap, finishedSegments, elapsed, firstTextMs, chunks, status, flags,
+                        startMetrics)
                 }
                 outputView?.text = generated
                 prefs.edit().putString("generated", generated).apply()
