@@ -824,7 +824,53 @@ class MainActivity : Activity() {
             group(label("First text: " + result.optLong("first_text_ms") + "ms · structural flags: " +
                 result.optInt("structural_flags") + " · seed " +
                 result.optJSONObject("settings")?.optInt("seed"), 12f, muted))
+            val existing = WritingTestBench.rating(this, result.optString("id"))
+            if (existing != null) {
+                val scores = existing.optJSONObject("scores")
+                val mean = WritingTestBench.QUALITY_AXES.map { scores?.optInt(it, 0) ?: 0 }.average()
+                group(label("Human-rated prose quality: " + "%.2f".format(mean) + "/5", 12f, mint))
+            }
+            group(button(if (existing == null) "Rate the actual writing" else "Update quality assessment", {
+                showQualityAssessment(result.optString("id"))
+            }))
         }
+    }
+
+    private fun showQualityAssessment(runId: String) {
+        val pane = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(6), dp(14), dp(8))
+        }
+        val scores = linkedMapOf<String, Int>()
+        val previous = WritingTestBench.rating(this, runId)?.optJSONObject("scores")
+        WritingTestBench.QUALITY_AXES.forEach { axis ->
+            val starting = previous?.optInt(axis, 3) ?: 3
+            scores[axis] = starting
+            val title = label("$axis: $starting / 5", 13f, white)
+            pane.addView(title)
+            val rating = SeekBar(this).apply {
+                max = 4
+                progress = starting - 1
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        scores[axis] = progress + 1
+                        title.text = "$axis: ${progress + 1} / 5"
+                    }
+                    override fun onStartTrackingTouch(bar: SeekBar?) {}
+                    override fun onStopTrackingTouch(bar: SeekBar?) {}
+                })
+            }
+            pane.addView(rating)
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Rate the real generated chapter")
+            .setView(ScrollView(this).apply { addView(pane) })
+            .setPositiveButton("Save assessment") { _, _ ->
+                try {
+                    WritingTestBench.rateRun(this, runId, scores)
+                    info("Model comparison score recorded"); build()
+                } catch (e: Exception) { info("Rating not saved: ${e.message}") }
+            }.setNegativeButton("Cancel", null).show()
     }
 
     private fun shareDraft() {
