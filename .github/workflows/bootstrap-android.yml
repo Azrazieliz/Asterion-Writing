@@ -28,6 +28,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/android.yml app/ build.gradle.kts settings.gradle.kts gradle.properties docs/ANDROID_TEST_DELIVERY.md .gitignore
+          git add app/ build.gradle.kts settings.gradle.kts gradle.properties docs/ANDROID_TEST_DELIVERY.md .gitignore
           git commit -m "Implement Android writer test app and Hugging Face downloader" || exit 0
           git push
