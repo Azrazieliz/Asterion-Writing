@@ -28,6 +28,8 @@ class ModelDownloadService : Service() {
         private const val CHANNEL = "model_downloads"
         private const val NOTIFY_ID = 5102
         private val cancel = AtomicBoolean(false)
+        private val running = AtomicBoolean(false)
+        fun isRunning(): Boolean = running.get()
         fun modelsDir(context: Context): File = File(context.filesDir, "models").apply { mkdirs() }
         fun modelName(f: ModelFile): String = f.repo.replace('/', '_') + "__" + f.path.substringAfterLast('/')
         /** Store the transfer identity so UI recreation never loses the model selection. */
@@ -78,13 +80,14 @@ class ModelDownloadService : Service() {
         val notif = notification("Preparing ${f.path.substringAfterLast('/')}", 0)
         if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFY_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         else startForeground(NOTIFY_ID, notif)
+        running.set(true)
         worker = Thread({
             try { download(f) }
             catch (t: Exception) {
                 val prefix = if (cancel.get()) "Paused" else "Failed"
                 status("$prefix: ${f.path.substringAfterLast('/')} — ${t.message ?: "transfer interrupted"}",
                     false, prefs.getInt(KEY_PROGRESS, 0))
-            } finally { connection = null; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(startId) }
+            } finally { running.set(false); connection = null; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(startId) }
         }, "HuggingFace-Download").apply { start() }
         return START_REDELIVER_INTENT
     }
