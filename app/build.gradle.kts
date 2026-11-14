@@ -3,7 +3,7 @@ android {
     namespace = "com.asterion.writing.preview"
     compileSdk = 35
     defaultConfig {
-        applicationId = "com.asterion.writing.preview"
+        applicationId = "com.asterion.writing.bench"
         minSdk = 29
         targetSdk = 35
         versionCode = 2
