@@ -545,7 +545,10 @@ class MainActivity : Activity() {
         if (continueExisting && existingDraft.isBlank()) {
             info("No saved chapter to continue"); return
         }
-        if (!continueExisting && generated.isNotBlank()) WritingTestBench.archiveDraft(this, generated)
+        if (!continueExisting && generated.isNotBlank()) {
+            WritingTestBench.archiveDraft(this, generated)
+            if (workspaceId != null) WriterWorkspaceStore(this).saveRevision(workspaceId, generated)
+        }
         val passCount = segments
         val cap = tokenCap
         val ctx = contextCap
@@ -700,7 +703,11 @@ class MainActivity : Activity() {
             if (busy) { info("Stop generation before switching projects"); return@button }
             if (prefs.getString("active_workspace_id", null) == null && generated.isNotBlank())
                 WritingTestBench.archiveDraft(this, generated)
-            prefs.edit().remove("active_workspace_id").putString("generated", "").apply()
+            prefs.edit().remove("active_workspace_id")
+                .remove("project_title").remove("series_title").remove("volume_title")
+                .remove("chapter_title").remove("prompt").remove("cast").remove("canon")
+                .remove("scene_objective").remove("chapter_plan")
+                .putString("generated", "").apply()
             WritingTestBench.checkpoint(this, "")
             projectTitle = ""; seriesTitle = ""; volumeTitle = ""; chapterTitle = ""
             cast = ""; canon = ""; sceneObjective = ""; chapterPlan = ""
@@ -780,6 +787,14 @@ class MainActivity : Activity() {
         if (busy) { info("An operation is already running"); return }
         val mode = creationMode
         if (mode == "Chapter prose") { generate(false); return }
+        if (mode != "Continuity critique") {
+            val current = prefs.getString("active_workspace_id", null)?.let {
+                WriterWorkspaceStore(this).get(it)
+            }
+            if (current?.approved == true) {
+                info("Accepted chapter is locked. Fork it from Library to edit its story state."); return
+            }
+        }
         if (prompt.isBlank()) { info("Define your original universe premise first"); return }
         val sampling = try { WritingSampling.from(prefs) }
         catch(e: Exception) { info("Sampler settings invalid: ${e.message}"); return }
