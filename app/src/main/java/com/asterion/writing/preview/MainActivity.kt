@@ -20,6 +20,10 @@ import android.widget.*
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.asterion.writing.QualityGate
+import com.asterion.writing.NarrativeController
+import com.asterion.writing.SceneObjective
+import com.asterion.writing.ChapterContext
+import com.asterion.writing.AuthoringProfile
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -49,6 +53,12 @@ class MainActivity : Activity() {
     private var segments = 4
     private var projectTitle = ""
     private var chapterTitle = ""
+    private var seriesTitle = ""
+    private var volumeTitle = ""
+    private var chapterPlan = ""
+    private var authorProfile = ""
+    private var pointOfView = ""
+    private var editorGuidance = ""
     private var cast = ""
     private var sceneObjective = ""
     private var downloadProgressView: ProgressBar? = null
@@ -69,16 +79,26 @@ class MainActivity : Activity() {
         generated = WritingTestBench.readCheckpoint(this).ifBlank { prefs.getString("generated", "") ?: "" }
         projectTitle = prefs.getString("project_title", "") ?: ""
         chapterTitle = prefs.getString("chapter_title", "") ?: ""
+        seriesTitle = prefs.getString("series_title", "") ?: ""
+        volumeTitle = prefs.getString("volume_title", "") ?: ""
+        chapterPlan = prefs.getString("chapter_plan", "") ?: ""
+        authorProfile = prefs.getString("author_profile", "") ?: ""
+        pointOfView = prefs.getString("point_of_view", "") ?: ""
+        editorGuidance = prefs.getString("editor_guidance", "") ?: ""
         cast = prefs.getString("cast", "") ?: ""
         sceneObjective = prefs.getString("scene_objective", "") ?: ""
         tokenCap = prefs.getInt("token_cap", 1280)
         contextCap = prefs.getInt("context_cap", 4096)
         segments = prefs.getInt("segments", 4)
+        val current = prefs.getString("active_workspace_id", null)?.let {
+            runCatching { WriterWorkspaceStore(this).get(it) }.getOrNull()
+        }
+        if (current != null) restoreWorkspace(current)
         build()
         handler.post(object: Runnable {
             override fun run() {
                 if (!isFinishing) {
-                    if (tab == 1) {
+                    if (tab == 2) {
                         statusView?.text = prefs.getString(ModelDownloadService.KEY_STATUS, "No active download")
                         downloadProgressView?.progress = prefs.getInt(ModelDownloadService.KEY_PROGRESS, 0)
                         resumeDownloadButton?.isEnabled = ModelDownloadService.resumable(this@MainActivity) &&
@@ -138,16 +158,19 @@ class MainActivity : Activity() {
         outer.addView(header)
         val nav = LinearLayout(this); nav.setPadding(dp(12), 0, dp(12), 0)
         val w = button("STUDIO", { tab = 0; build() }, tab == 0)
-        val m = button("MODELS", { tab = 1; build() }, tab == 1)
-        val r = button("REVIEWS", { tab = 2; build() }, tab == 2)
-        nav.addView(w, LinearLayout.LayoutParams(0, dp(52), 1f)); nav.addView(m, LinearLayout.LayoutParams(0, dp(52), 1f))
+        val l = button("LIBRARY", { tab = 1; build() }, tab == 1)
+        val m = button("MODELS", { tab = 2; build() }, tab == 2)
+        val r = button("REVIEW", { tab = 3; build() }, tab == 3)
+        nav.addView(w, LinearLayout.LayoutParams(0, dp(52), 1f))
+        nav.addView(l, LinearLayout.LayoutParams(0, dp(52), 1f))
+        nav.addView(m, LinearLayout.LayoutParams(0, dp(52), 1f))
         nav.addView(r, LinearLayout.LayoutParams(0, dp(52), 1f))
         outer.addView(nav)
         val scroll = ScrollView(this); scroll.isFillViewport = true
         content = LinearLayout(this); content.orientation = LinearLayout.VERTICAL; content.setPadding(dp(20), dp(8), dp(20), dp(36))
         scroll.addView(content); outer.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(outer)
-        when(tab) { 0 -> writerPage(); 1 -> modelPage(); else -> resultsPage() }
+        when(tab) { 0 -> writerPage(); 1 -> workspacePage(); 2 -> modelPage(); else -> resultsPage() }
     }
     private fun writerPage() {
         group(label("CHAPTER STUDIO", 18f, white, true))
@@ -156,20 +179,30 @@ class MainActivity : Activity() {
         val projectInput = field(projectTitle, 1, "Universe / series title")
         projectInput.addTextChangedListener(watcher { projectTitle = it; prefs.edit().putString("project_title", it).apply() })
         group(projectInput)
-        val chapterInput = field(chapterTitle, 1, "Volume and chapter title")
+        val seriesInput = field(seriesTitle, 1, "Series")
+        seriesInput.addTextChangedListener(watcher { seriesTitle = it; prefs.edit().putString("series_title", it).apply() })
+        group(seriesInput)
+        val volumeInput = field(volumeTitle, 1, "Volume")
+        volumeInput.addTextChangedListener(watcher { volumeTitle = it; prefs.edit().putString("volume_title", it).apply() })
+        group(volumeInput)
+        val chapterInput = field(chapterTitle, 1, "Chapter")
         chapterInput.addTextChangedListener(watcher { chapterTitle = it; prefs.edit().putString("chapter_title", it).apply() })
         group(chapterInput)
         group(label("CHARACTERS & RELATIONSHIPS", 14f, mint, true))
         val castInput = field(cast, 3, "Characters, motivations, secrets, relationships")
         castInput.addTextChangedListener(watcher { cast = it; prefs.edit().putString("cast", it).apply() })
         group(castInput)
+        group(label("CHAPTER ARC / PLAN", 14f, mint, true))
+        val outlineInput = field(chapterPlan, 3, "How the chapter should develop, major beats and consequences")
+        outlineInput.addTextChangedListener(watcher { chapterPlan = it; prefs.edit().putString("chapter_plan", it).apply() })
+        group(outlineInput)
         group(label("CURRENT SCENE OBJECTIVE", 14f, mint, true))
         val objectiveInput = field(sceneObjective, 3, "What changes in this scene? Decision, conflict, consequence")
         objectiveInput.addTextChangedListener(watcher { sceneObjective = it; prefs.edit().putString("scene_objective", it).apply() })
         group(objectiveInput)
         val model = loaded ?: "No model loaded"
         group(label("Active model: $model", 13f, if (loaded == null) muted else mint))
-        group(button("Manage or load models", { tab = 1; build() }))
+        group(button("Manage or load models", { tab = 2; build() }))
         group(button("Use standardized A/B story test", { prompt = WritingTestBench.STANDARD_BRIEF; prefs.edit().putString("prompt", prompt).apply(); build() }))
         group(label("PREMISE & WRITING DIRECTION", 14f, mint, true))
         val promptInput = field(prompt, 5)
@@ -177,6 +210,14 @@ class MainActivity : Activity() {
         group(label("ESTABLISHED CANON / CONTINUITY", 14f, mint, true))
         val canonInput = field(canon, 3, "World rules, established characters, what must stay consistent")
         canonInput.addTextChangedListener(watcher { canon = it; prefs.edit().putString("canon", it).apply() }); group(canonInput)
+        group(label("AUTHORING PROFILE", 14f, mint, true))
+        val profileInput = field(authorProfile, 1, "Narrative style, language, prose density")
+        profileInput.addTextChangedListener(watcher { authorProfile = it; prefs.edit().putString("author_profile", it).apply() })
+        group(profileInput)
+        val povInput = field(pointOfView, 1, "Viewpoint / narration")
+        povInput.addTextChangedListener(watcher { pointOfView = it; prefs.edit().putString("point_of_view", it).apply() })
+        group(povInput)
+        group(button("Save project and draft", { saveCurrentWorkspace() }, true))
         group(button(if (showSampler) "Hide sampler parameters" else "Edit native sampler parameters", {
             showSampler = !showSampler; build()
         }))
@@ -231,6 +272,8 @@ class MainActivity : Activity() {
         group(button("Start new chapter · preserve old draft", { generate(false) }, true))
         group(button("Continue chapter from saved text", { generate(true) }))
         group(button("Stop after current token", { generation?.cancel(); info("Stopping; draft checkpoint will be preserved.") }))
+        group(button("Edit or revise chapter", { editChapter() }))
+        group(button("Review and approve draft", { tab = 3; build() }))
         group(label("LIVE CHAPTER DRAFT", 18f, white, true))
         group(label("Continuations append to the saved draft; they do not reproduce hidden model state or pretend to resume mid-token.", 12f, muted))
         outputView = label(generated.ifBlank { "Your generated prose will appear here. No synthetic sample text is displayed." }, 15f)
@@ -369,10 +412,19 @@ class MainActivity : Activity() {
         val brief = prompt
         val constraints = canon
         val project = projectTitle
+        val series = seriesTitle
+        val volume = volumeTitle
         val chapter = chapterTitle
+        val plan = chapterPlan
+        val profile = authorProfile
+        val viewpoint = pointOfView
+        val workspaceId = prefs.getString("active_workspace_id", null)
         val characters = cast
         val objective = sceneObjective
         val existingDraft = if (continueExisting) generated else ""
+        if (workspaceId != null && WriterWorkspaceStore(this).get(workspaceId)?.approved == true) {
+            info("This chapter is accepted and locked. Fork it from Library to edit."); return
+        }
         if (continueExisting && existingDraft.isBlank()) {
             info("No saved chapter to continue"); return
         }
@@ -396,21 +448,19 @@ class MainActivity : Activity() {
             var problem: String? = null
             try {
                 repeat(passCount) { section ->
-                    val storyState = "Project: " + project.ifBlank { "Untitled" } +
-                        "\nChapter: " + chapter.ifBlank { "Current chapter" } +
-                        "\nCast and relationships: " + characters.ifBlank { "Establish in prose." } +
-                        "\nScene objective: " + objective.ifBlank { "Advance an irreversible choice." } +
-                        "\nPremise: " + brief +
-                        "\nCanon: " + constraints.ifBlank { "None established." }
-                    val instruction = if (text.isEmpty()) {
-                        "Write the opening scene of this original chapter.\n" + storyState +
-                        "\nBegin with meaningful action and natural dialogue; write only prose."
-                    } else {
-                        "Continue this SAME original chapter with NEW prose. Do not repeat, summarize or paraphrase " +
-                        "previous paragraphs. Progress the scene goal, character choices, relationships and consequences.\n" +
-                        storyState + "\nPrevious prose for continuity (not to repeat):\n" +
-                        text.toString().takeLast(3000) + "\nContinue immediately without a recap."
-                    }
+                    // The narrative director builds explicit scene goals; its metadata is not
+                    // automatically promoted to canon until the owner accepts it.
+                    val director = NarrativeController()
+                    val goal = SceneObjective("scene-${section + 1}", workspaceId ?: "local-chapter",
+                        "Scene ${section + 1}", objective.ifBlank { "Develop conflict and its consequences" },
+                        characters.split(',', '\n').map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+                        viewpoint, chronology = section.toLong())
+                    val state = ChapterContext(
+                        project.ifBlank { "Untitled universe" }, series, volume,
+                        chapter.ifBlank { "Current chapter" }, brief,
+                        constraints, characters, plan, emptyList(),
+                        AuthoringProfile(name = "Writer profile", style = profile, viewpoint = viewpoint))
+                    val instruction = director.makeInstruction(state, goal, text.toString(), text.isNotBlank())
                     withContext(Dispatchers.IO) {
                         active.configureSampler(sampling.temperature, sampling.topP, sampling.minP,
                             sampling.repetition, sampling.seed)
@@ -433,6 +483,7 @@ class MainActivity : Activity() {
                                 prefs.edit().putString("generated", generated).apply()
                                 withContext(Dispatchers.IO) {
                                     WritingTestBench.checkpoint(this@MainActivity, generated)
+                                    if (workspaceId != null) WriterWorkspaceStore(this@MainActivity).autosave(workspaceId, generated)
                                 }
                                 lastCheckpoint = now
                             }
@@ -441,7 +492,10 @@ class MainActivity : Activity() {
                     if (!emittedInSegment) error("Native engine returned no text for scene ${section + 1}")
                     finishedSegments++
                     generated = text.toString()
-                    withContext(Dispatchers.IO) { WritingTestBench.checkpoint(this@MainActivity, generated) }
+                    withContext(Dispatchers.IO) {
+                        WritingTestBench.checkpoint(this@MainActivity, generated)
+                        if (workspaceId != null) WriterWorkspaceStore(this@MainActivity).autosave(workspaceId, generated)
+                    }
                     if(section + 1 < passCount && text.isNotEmpty()) text.append("\n\n")
                     if(text.isEmpty()) error("Native engine returned no text")
                 }
@@ -457,6 +511,7 @@ class MainActivity : Activity() {
                     .count { it.severity.name == "BLOCK" }
                 withContext(NonCancellable + Dispatchers.IO) {
                     WritingTestBench.checkpoint(this@MainActivity, generated)
+                    if (workspaceId != null) WriterWorkspaceStore(this@MainActivity).autosave(workspaceId, generated)
                     WritingTestBench.saveRun(this@MainActivity, trialModel, brief, generated, sampling,
                         ctx, cap, finishedSegments, elapsed, firstTextMs, chunks, status, flags)
                 }
