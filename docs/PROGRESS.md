@@ -23,3 +23,27 @@
 7. Build, install and test on Samsung SM-S948B; never confuse host tests with phone acceptance.
 
 **No existing Asterion code or user models altered. No training, phone APK, or end-to-end generation delivered in this foundation.**
+
+## 2026-11-14 — v0.4 Writer Workspace source integration (newest)
+
+**Implemented in source, not yet declared phone-accepted:**
+- Native Android Studio / Library / Models / Review tabs: structured universe/series/volume/chapter inputs, authoring profiles, chapter plans, cast, canon and per-scene goals.
+- Local preview manuscript persistence with per-project IDs, safe revision snapshots, approved read-only chapters, deliberate forks and linked next chapters that inherit only explicitly accepted outcome summaries. Nexus remains future authority; no invisible sync claim.
+- NarrativeController scene statuses, timeline-order constraints, bounded canon and character-knowledge instructions, structural repetition/length checks and host tests.
+- On-phone chapter continuation after interruption, mode-driven worldbuilding/character arcs/volume outlines/continuity critique, selective native AI passage rewriting and human approval before changing the draft.
+- Explicit GGUF download pause/resume with persisted transfer identity and Range Content-Range check; saved drafts and previous outputs are not silently overwritten.
+- Existing CPU llama.cpp GGUF inference reused, with optional compatible GGUF LoRA adapter import / native attach before the system prompt. No conversion, model acceptance or acceleration implied.
+- Human eight-axis model quality assessments plus first-text/character-rate, real available memory, battery and thermal samples; no synthetic token/s claim.
+- Rights/provenance-gated LoRA adaptation script with story-universe-separated validation. Actual training, GGUF conversion, quality evaluation and on-device LoRA proof remain outstanding.
+- SAF manuscript export and local Android model/adapter import; no invented Nexus/Rounder service.
+- CI v0.4 builds from `main` through the pre-existing Android workflow, with host-core and Python script syntax validation.
+
+**Still blocked / not delivered:**
+- An actual accepted writing-specialist checkpoint and controlled blind quality comparison; there is no training dataset or suitable training GPU committed.
+- Native QNN/Vulkan GGUF backend; the inherited text runtime is CPU only.
+- Authenticated Nexus transactional draft/publish API and full Rounder/TeraBox staging API (not present in inspected available repositories); user-authorized SAF/manual import/export remain the functional route.
+- True host-level merged Art + Sound + 3D app integration and resource arbitration; Sound's current repository contains a specification, not an Android module.
+- Durable background inference service / automatic process-death resume at exact token position, automatic semantic continuity editing and full multi-volume on-device literary acceptance.
+- Installed and device-verified APK is an additional gate after CI. Do not call this delivered solely from a source commit.
+
+**Source entrypoints:** `core/NarrativeController.kt`, `app/.../WriterWorkspaceStore.kt`, `app/.../MainActivity.kt`, `scripts/writer_specialist_pipeline.py`, `docs/ROADMAP_TO_PRODUCTION.md`.
