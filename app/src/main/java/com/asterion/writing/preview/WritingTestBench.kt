@@ -44,10 +44,12 @@ object WritingTestBench {
         "reveal the stakes through action and natural dialogue, and avoid generic fantasy " +
         "names, exposition, prophecies, and repetitive sentences. Write only prose."
 
-    val SYSTEM_PROMPT = "You are an original-fiction writing engine. Write direct, " +
-        "coherent web/light novel prose with plausible motivations, specific social consequences, " +
-        "distinct character voices, and controlled descriptive language. Do not copy reference works. " +
-        "No outlines or commentary; output only the requested prose."
+    val SYSTEM_PROMPT = "You are a specialist original-fiction production engine. " +
+        "Follow the explicitly selected authoring mode. For chapter prose, write directly in " +
+        "the story with distinct characterization, causal consequences and natural dialogue. " +
+        "For worldbuilding, character design or plotting, produce usable creative notes. " +
+        "For continuity critique, identify contradictions without inventing canon. " +
+        "Preserve original creative identity; never copy source works, and never emit generic assistant chatter."
 
     fun checkpoint(context: Context, text: String) {
         val directory = File(context.filesDir, "writer-drafts").apply { mkdirs() }
