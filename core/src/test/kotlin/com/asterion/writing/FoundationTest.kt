@@ -51,6 +51,31 @@ fun main() {
     check(gate.check("A completely unrelated journey begins in the distant ocean city.", reference).none { it.code == "REFERENCE_OVERLAP" })
     check(gate.check(repeated).any { it.code == "EDITORIAL_REVIEW_REQUIRED" })
 
+    val director = NarrativeController()
+    val opening = SceneObjective("opening", "c1", "The bridge", "Force an irreversible choice",
+        listOf("Mara", "Sen"), chronology = 1)
+    director.putPlanned(opening)
+    expectFailure { director.putPlanned(opening) }
+    director.markReviewed("opening")
+    expectFailure { director.accept("missing", "anything") }
+    director.accept("opening", "The bridge was destroyed")
+    check(director.chapterScenes("c1").single().status == SceneStatus.ACCEPTED)
+    expectFailure { director.makeInstruction(
+        ChapterContext("World", "Serial", "Volume", "Opening", "An original city", "",
+            "Mara knows the price, Sen does not", "", emptyList()), director.chapterScenes("c1").single(), "", false
+    ) }
+    val draftScene = SceneObjective("scene2", "c1", "Price", "Confront the consequences",
+        listOf("Mara"), chronology = 2)
+    val instruction = director.makeInstruction(
+        ChapterContext("World", "Serial", "Volume", "Opening", "An original city",
+            "Magic consumes memory", "Mara knows the price, Sen does not",
+            "Consequences", listOf("The bridge was destroyed")),
+        draftScene, "Mara reached the shoreline.", true)
+    check("The bridge was destroyed" in instruction)
+    check("Mara reached the shoreline" in instruction)
+    check("Continue with only new prose" in instruction)
+    check(director.reviewChapter("Short.").codes.contains("SHORT_DRAFT"))
+
     val temp = Files.createTempDirectory("asterion-writing-").toFile()
     try {
         val journal = ProjectJournal(File(temp, "project.journal"))
