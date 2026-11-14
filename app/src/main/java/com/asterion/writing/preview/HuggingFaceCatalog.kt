@@ -15,7 +15,9 @@ object HuggingFaceCatalog {
     val presets = linkedMapOf(
         "Creative Writer 3B" to "mradermacher/Llama3.2-3B-creative-writer-v0.1-GGUF",
         "Creative 3B" to "mradermacher/Llama-3.2-3B-Creative-GGUF",
-        "Stheno 8B" to "tensorblock/L3-8B-Stheno-v3.2-GGUF"
+        "Stheno 8B" to "tensorblock/L3-8B-Stheno-v3.2-GGUF",
+        "Magnum 4B" to "bartowski/magnum-v2-4b-GGUF",
+        "Lumimaid 8B" to "NeverSleep/Lumimaid-v0.2-8B-GGUF"
     )
 
     fun normalizeRepo(input: String): String {

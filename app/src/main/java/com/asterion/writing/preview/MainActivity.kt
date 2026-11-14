@@ -10,6 +10,7 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -44,6 +45,9 @@ class MainActivity : Activity() {
     private var canon = ""
     private var generated = ""
     private var tokenCap = 768
+    private var contextCap = 4096
+    private var segments = 1
+    private var showSampler = false
     private var selectedFile: ModelFile? = null
     private var files: List<ModelFile> = emptyList()
     private var repoText: EditText? = null
@@ -57,6 +61,9 @@ class MainActivity : Activity() {
         prompt = prefs.getString("prompt", prompt) ?: prompt
         canon = prefs.getString("canon", "") ?: ""
         generated = prefs.getString("generated", "") ?: ""
+        tokenCap = prefs.getInt("token_cap", 768)
+        contextCap = prefs.getInt("context_cap", 4096)
+        segments = prefs.getInt("segments", 1)
         build()
         handler.post(object: Runnable {
             override fun run() {
@@ -98,13 +105,15 @@ class MainActivity : Activity() {
         val nav = LinearLayout(this); nav.setPadding(dp(12), 0, dp(12), 0)
         val w = button("WRITER", { tab = 0; build() }, tab == 0)
         val m = button("MODELS", { tab = 1; build() }, tab == 1)
+        val r = button("RESULTS", { tab = 2; build() }, tab == 2)
         nav.addView(w, LinearLayout.LayoutParams(0, dp(52), 1f)); nav.addView(m, LinearLayout.LayoutParams(0, dp(52), 1f))
+        nav.addView(r, LinearLayout.LayoutParams(0, dp(52), 1f))
         outer.addView(nav)
         val scroll = ScrollView(this); scroll.isFillViewport = true
         content = LinearLayout(this); content.orientation = LinearLayout.VERTICAL; content.setPadding(dp(20), dp(8), dp(20), dp(36))
         scroll.addView(content); outer.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(outer)
-        if (tab == 0) writerPage() else modelPage()
+        when(tab) { 0 -> writerPage(); 1 -> modelPage(); else -> resultsPage() }
     }
     private fun writerPage() {
         group(label("STORY TEST BENCH", 17f, white, true))
@@ -112,21 +121,64 @@ class MainActivity : Activity() {
         val model = loaded ?: "No model loaded"
         group(label("Active model: $model", 13f, if (loaded == null) muted else mint))
         group(button("Manage or load models", { tab = 1; build() }))
+        group(button("Use standardized A/B story test", { prompt = WritingTestBench.STANDARD_BRIEF; prefs.edit().putString("prompt", prompt).apply(); build() }))
         group(label("Story brief", 14f, white, true))
         val promptInput = field(prompt, 5)
         promptInput.addTextChangedListener(watcher { prompt = it; prefs.edit().putString("prompt", it).apply() }); group(promptInput)
         group(label("Canon / constraints (optional)", 14f, white, true))
         val canonInput = field(canon, 3, "World rules, established characters, what must stay consistent")
         canonInput.addTextChangedListener(watcher { canon = it; prefs.edit().putString("canon", it).apply() }); group(canonInput)
-        group(label("Output tokens (choose length)", 13f, muted))
+        group(button(if (showSampler) "Hide sampler parameters" else "Edit native sampler parameters", {
+            showSampler = !showSampler; build()
+        }))
+        if (showSampler) {
+            listOf(
+                Triple("Temperature", "temperature", "0.80"),
+                Triple("Top-p", "top_p", "0.90"),
+                Triple("Min-p", "min_p", "0.05"),
+                Triple("Repeat penalty", "repetition", "1.12"),
+                Triple("Seed (-1 random)", "seed", "42")
+            ).forEach { (labelText, key, fallback) ->
+                group(label(labelText, 12f, muted))
+                val input = field(prefs.getString(key, fallback) ?: fallback)
+                input.addTextChangedListener(watcher { prefs.edit().putString(key, it).apply() })
+                group(input, 1)
+            }
+        }
+        group(label("Context window (applies on next model load)", 13f, muted))
+        val windows = listOf(4096, 8192)
+        val contextChoice = Spinner(this)
+        contextChoice.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, windows.map { it.toString() + " tokens" })
+        contextChoice.setSelection(windows.indexOf(contextCap).coerceAtLeast(0))
+        contextChoice.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                contextCap = windows[pos]; prefs.edit().putInt("context_cap", contextCap).apply()
+            }
+        }
+        group(contextChoice)
+        group(label("Output tokens per scene segment", 13f, muted))
         val tok = Spinner(this)
         val choices = listOf(384, 768, 1280, 2048)
         tok.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, choices.map { "$it tokens" })
         tok.setSelection(choices.indexOf(tokenCap).coerceAtLeast(0))
         tok.onItemSelectedListener = object: android.widget.AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
-            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) { tokenCap = choices[pos] }
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) { tokenCap = choices[pos]; prefs.edit().putInt("token_cap", tokenCap).apply() }
         }; group(tok)
+        group(label("Segments per run (1 for A/B; 2–8 for chapter experiments)", 13f, muted))
+        val segmentCounts = listOf(1, 2, 4, 8)
+        val parts = Spinner(this)
+        parts.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
+            segmentCounts.map { it.toString() + " segment(s)" })
+        parts.setSelection(segmentCounts.indexOf(segments).coerceAtLeast(0))
+        parts.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                segments = segmentCounts[pos]; prefs.edit().putInt("segments", segments).apply()
+            }
+        }
+        group(parts)
         group(button("Generate original fiction", { generate() }, true))
         group(button("Stop generation", { generation?.cancel(); info("Generation stopped; the existing text remains saved.") }))
         group(label("DRAFT / LIVE OUTPUT", 17f, white, true))
@@ -227,8 +279,8 @@ class MainActivity : Activity() {
                     val candidate = AiChat.getInferenceEngine(this@MainActivity)
                     candidate.state.first { it is InferenceEngine.State.Initialized || it is InferenceEngine.State.Error }
                     require(candidate.state.value is InferenceEngine.State.Initialized) { "Native engine failed to initialize" }
-                    candidate.loadModel(file.absolutePath, 4096)
-                    candidate.setSystemPrompt("You are Asterion Writing, a specialist author of original web and light novels. Write compelling, coherent fiction with distinct personalities, sustained causal progression, vivid but controlled description, and natural dialogue. Never copy supplied source fiction. Follow the user's narrative brief; maintain continuity. Output prose, not commentary.")
+                    candidate.loadModel(file.absolutePath, contextCap)
+                    candidate.setSystemPrompt(WritingTestBench.SYSTEM_PROMPT)
                     engine = candidate
                 }
                 loaded = file.name; info("Loaded ${file.name} · CPU native engine ready"); build()
@@ -246,25 +298,119 @@ class MainActivity : Activity() {
         if (loaded == null || active == null) { info("Load a GGUF model from Models first"); return }
         if (busy) { info("A generation is already running"); return }
         if (prompt.isBlank()) { info("Enter a story brief first"); return }
-        busy = true; generated = ""; outputView?.text = "Generating…"
-        val fullBrief = "Writing task:\n$prompt\n\nApproved canon / constraints:\n${canon.ifBlank { "None established." }}\n\nWrite genuinely original fictional prose, opening directly in-scene. Avoid excessive exposition, repeated expressions and imitation of existing characters or settings."
+        val sampling = try { WritingSampling.from(prefs) }
+            catch(e: Exception) { info("Sampler settings invalid: " + e.message); return }
+        val trialModel = loaded!!
+        val brief = prompt
+        val constraints = canon
+        val passCount = segments
+        val cap = tokenCap
+        val ctx = contextCap
+        busy = true
+        generated = ""
+        outputView?.text = "Running real native inference…"
+        val started = SystemClock.elapsedRealtime()
         generation = scope.launch {
+            val text = StringBuilder()
+            var firstTextMs = -1L
+            var chunks = 0
+            var lastUi = 0L
+            var lastCheckpoint = 0L
+            var finishedSegments = 0
+            var status = "complete"
+            var problem: String? = null
             try {
-                active.sendUserPrompt(fullBrief, tokenCap).collect { token ->
-                    generated += token
-                    outputView?.text = generated
-                    prefs.edit().putString("generated", generated).apply()
+                repeat(passCount) { section ->
+                    val instruction = if(section == 0) {
+                        "Original fiction task:\n" + brief + "\n\nCanon:\n" +
+                        constraints.ifBlank { "None established." } +
+                        "\n\nBegin directly in-scene. Write only the actual story."
+                    } else {
+                        "Continue this SAME original chapter with new prose. Do not repeat or paraphrase " +
+                        "earlier sentences. Advance character decisions, action and consequences.\n" +
+                        "Original plan:\n" + brief + "\n\nCanon:\n" +
+                        constraints.ifBlank { "None established." } +
+                        "\n\nMost recent written paragraphs (for continuity only):\n" +
+                        text.toString().takeLast(1800) + "\n\nContinue immediately, no recap."
+                    }
+                    withContext(Dispatchers.IO) {
+                        active.configureSampler(sampling.temperature, sampling.topP, sampling.minP,
+                            sampling.repetition, sampling.seed)
+                        active.resetSession(WritingTestBench.SYSTEM_PROMPT)
+                    }
+                    active.sendUserPrompt(instruction, cap).collect { piece ->
+                        if(piece.isNotEmpty()) {
+                            val now = SystemClock.elapsedRealtime()
+                            if(firstTextMs < 0L) firstTextMs = now - started
+                            text.append(piece); chunks++
+                            if(now - lastUi >= 180) {
+                                generated = text.toString()
+                                outputView?.text = generated
+                                lastUi = now
+                            }
+                            if(now - lastCheckpoint >= 2000) {
+                                generated = text.toString()
+                                prefs.edit().putString("generated", generated).apply()
+                                withContext(Dispatchers.IO) {
+                                    WritingTestBench.checkpoint(this@MainActivity, generated)
+                                }
+                                lastCheckpoint = now
+                            }
+                        }
+                    }
+                    finishedSegments++
+                    generated = text.toString()
+                    withContext(Dispatchers.IO) { WritingTestBench.checkpoint(this@MainActivity, generated) }
+                    if(section + 1 < passCount && text.isNotEmpty()) text.append("\n\n")
+                    if(text.isEmpty()) error("Native engine returned no text")
                 }
-                if (generated.isNotBlank()) {
-                    File(filesDir, "last-draft.txt").writeText(generated)
-                    val findings = QualityGate().check(generated)
-                    info("Draft saved locally · ${generated.split(Regex("\\s+")).size} words · ${findings.filter { it.severity.name == "BLOCK" }.size} structural flags · editorial review required")
-                } else info("Inference returned no text; inspect model compatibility")
-            } catch(e: CancellationException) { info("Generation interrupted; partial draft retained") }
-            catch(e: Throwable) { info("Generation failed: ${e.message ?: e.javaClass.simpleName}") }
-            finally { busy = false; prefs.edit().putString("generated", generated).apply() }
+            } catch(e: CancellationException) {
+                status = "stopped"
+            } catch(e: Throwable) {
+                status = "error"
+                problem = e.message ?: e.javaClass.simpleName
+            } finally {
+                generated = text.toString()
+                val elapsed = SystemClock.elapsedRealtime() - started
+                val flags = if(generated.isBlank()) 1 else QualityGate().check(generated)
+                    .count { it.severity.name == "BLOCK" }
+                withContext(NonCancellable + Dispatchers.IO) {
+                    WritingTestBench.checkpoint(this@MainActivity, generated)
+                    WritingTestBench.saveRun(this@MainActivity, trialModel, brief, generated, sampling,
+                        ctx, cap, finishedSegments, elapsed, firstTextMs, chunks, status, flags)
+                }
+                outputView?.text = generated
+                prefs.edit().putString("generated", generated).apply()
+                busy = false
+                info(if(status == "complete") "Run saved: " + generated.trim().split(Regex("\\s+")).size +
+                    " words / " + (elapsed / 1000) + "s, " + flags + " structural flags"
+                    else "Run " + status + "; draft preserved. " + (problem ?: ""))
+            }
         }
     }
+
+    private fun resultsPage() {
+        group(label("MODEL COMPARISON RESULTS", 17f, white, true))
+        group(label("Private results stored on-device. Characters/s is a measured display rate, not native tokens/s.", 12f, muted))
+        group(button("Share results summary (without private story text)", {
+            val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, WritingTestBench.exportSummary(this))
+            startActivity(Intent.createChooser(intent, "Share test summary"))
+        }))
+        val history = WritingTestBench.recent(this)
+        if(history.isEmpty()) group(label("No recorded test runs yet", 13f, muted))
+        history.forEach { result ->
+            group(label(result.optString("model"), 13f, mint, true))
+            group(label(result.optString("status") + " · " + result.optInt("words") + " words · " +
+                (result.optLong("elapsed_ms") / 1000) + "s · " +
+                result.optDouble("chars_per_sec").toInt() + " characters/s · " +
+                result.optInt("segments") + " completed segments", 12f, white))
+            group(label("First text: " + result.optLong("first_text_ms") + "ms · structural flags: " +
+                result.optInt("structural_flags") + " · seed " +
+                result.optJSONObject("settings")?.optInt("seed"), 12f, muted))
+        }
+    }
+
     private fun shareDraft() {
         if (generated.isBlank()) { info("Generate a draft first"); return }
         val i = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "Asterion Writing draft").putExtra(Intent.EXTRA_TEXT, generated)
