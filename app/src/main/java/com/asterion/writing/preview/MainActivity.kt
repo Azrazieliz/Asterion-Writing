@@ -386,6 +386,7 @@ class MainActivity : Activity() {
         val started = SystemClock.elapsedRealtime()
         generation = scope.launch {
             val text = StringBuilder(existingDraft)
+            if (existingDraft.isNotBlank()) text.append("\n\n")
             var firstTextMs = -1L
             var chunks = 0
             var lastUi = 0L
@@ -415,8 +416,10 @@ class MainActivity : Activity() {
                             sampling.repetition, sampling.seed)
                         active.resetSession(WritingTestBench.SYSTEM_PROMPT)
                     }
+                    var emittedInSegment = false
                     active.sendUserPrompt(instruction, cap).collect { piece ->
                         if(piece.isNotEmpty()) {
+                            emittedInSegment = true
                             val now = SystemClock.elapsedRealtime()
                             if(firstTextMs < 0L) firstTextMs = now - started
                             text.append(piece); chunks++
@@ -435,6 +438,7 @@ class MainActivity : Activity() {
                             }
                         }
                     }
+                    if (!emittedInSegment) error("Native engine returned no text for scene ${section + 1}")
                     finishedSegments++
                     generated = text.toString()
                     withContext(Dispatchers.IO) { WritingTestBench.checkpoint(this@MainActivity, generated) }
