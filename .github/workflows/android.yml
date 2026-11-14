@@ -30,16 +30,8 @@ jobs:
         run: |
           git clone --quiet --depth 1 --branch v0.7.0 https://github.com/ggml-org/llama.cpp.git art-upstream/native/llama.cpp
           test "$(git -C art-upstream/native/llama.cpp rev-parse HEAD)" = "620d2225cc436ab0b001e3200e590e3b286ef9ab"
-      - name: Set fiction-friendly native sampling defaults
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('art-upstream/brain/src/main/cpp/ai_chat.cpp')
-          text = p.read_text()
-          old = 'constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;'
-          assert text.count(old) == 1
-          p.write_text(text.replace(old,'constexpr float DEFAULT_SAMPLER_TEMP    = 0.95f;'))
-          PY
+      - name: Patch only the CI copy of Art's native GGUF engine
+        run: python3 scripts/patch_art_brain.py art-upstream/brain
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.10.2
@@ -54,7 +46,7 @@ jobs:
           unzip -l app/build/outputs/apk/debug/*.apk | grep -q 'classes.dex'
       - uses: actions/upload-artifact@v4
         with:
-          name: Asterion-Writing-v0.1.0-Test-APK
+          name: Asterion-Writing-v0.2.0-Test-APK
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14

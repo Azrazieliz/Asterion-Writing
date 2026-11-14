@@ -1,0 +1,106 @@
+package com.asterion.writing.preview
+
+import android.content.Context
+import android.content.SharedPreferences
+import org.json.JSONObject
+import java.io.File
+import java.security.MessageDigest
+
+/** Private pilot-only benchmarking utilities. No model inference or story library is duplicated. */
+data class WritingSampling(
+    val temperature: Float,
+    val topP: Float,
+    val minP: Float,
+    val repetition: Float,
+    val seed: Int
+) {
+    fun validate() {
+        require(temperature.isFinite() && temperature in 0.05f..2.0f) { "Temperature must be 0.05–2.0" }
+        require(topP.isFinite() && topP in 0.1f..1f) { "Top-p must be 0.1–1.0" }
+        require(minP.isFinite() && minP >= 0f && minP < 1f) { "Min-p must be 0.0–0.99" }
+        require(repetition.isFinite() && repetition in 1f..2f) { "Repeat penalty must be 1.0–2.0" }
+        require(seed >= -1) { "Seed must be -1 (random) or nonnegative" }
+    }
+
+    companion object {
+        fun from(p: SharedPreferences): WritingSampling = WritingSampling(
+            p.getString("temperature", "0.80")!!.toFloatOrNull() ?: error("Invalid temperature"),
+            p.getString("top_p", "0.90")!!.toFloatOrNull() ?: error("Invalid top-p"),
+            p.getString("min_p", "0.05")!!.toFloatOrNull() ?: error("Invalid min-p"),
+            p.getString("repetition", "1.12")!!.toFloatOrNull() ?: error("Invalid repetition penalty"),
+            p.getString("seed", "42")!!.toIntOrNull() ?: error("Invalid seed")
+        ).also { it.validate() }
+    }
+
+    fun toJson(): JSONObject = JSONObject().put("temperature", temperature.toDouble())
+        .put("top_p", topP.toDouble()).put("min_p", minP.toDouble())
+        .put("repeat_penalty", repetition.toDouble()).put("seed", seed)
+}
+
+object WritingTestBench {
+    val STANDARD_BRIEF = "Write an original fantasy opening for adults (400–600 words). " +
+        "Begin with an irreversible choice by two morally complicated characters. " +
+        "Invent one unusual supernatural rule with immediate social consequences, " +
+        "reveal the stakes through action and natural dialogue, and avoid generic fantasy " +
+        "names, exposition, prophecies, and repetitive sentences. Write only prose."
+
+    val SYSTEM_PROMPT = "You are an original-fiction writing engine. Write direct, " +
+        "coherent web/light novel prose with plausible motivations, specific social consequences, " +
+        "distinct character voices, and controlled descriptive language. Do not copy reference works. " +
+        "No outlines or commentary; output only the requested prose."
+
+    fun checkpoint(context: Context, text: String) {
+        val directory = File(context.filesDir, "writer-drafts").apply { mkdirs() }
+        val next = File(directory, "active.txt.tmp")
+        next.writeText(text, Charsets.UTF_8)
+        val current = File(directory, "active.txt")
+        check(next.renameTo(current)) { "Could not save chapter checkpoint" }
+    }
+
+    /** A run is stored privately, never in a public GitHub repository or remote inference service. */
+    fun saveRun(
+        context: Context, model: String, brief: String, text: String, sampling: WritingSampling,
+        contextTokens: Int, newTokensPerPass: Int, segments: Int, elapsedMs: Long,
+        firstTextMs: Long, streamChunks: Int, status: String, findings: Int
+    ): JSONObject {
+        val folder = File(context.filesDir, "writing-tests").apply { mkdirs() }
+        val id = System.currentTimeMillis().toString()
+        val output = File(folder, id + ".txt")
+        output.writeText(text, Charsets.UTF_8)
+        val words = text.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
+        val obj = JSONObject()
+            .put("id", id).put("model", model).put("status", status)
+            .put("settings", sampling.toJson()).put("context_tokens", contextTokens)
+            .put("new_tokens_per_pass", newTokensPerPass).put("segments", segments)
+            .put("elapsed_ms", elapsedMs).put("first_text_ms", firstTextMs)
+            .put("stream_chunks", streamChunks).put("words", words)
+            .put("characters", text.length).put("structural_flags", findings)
+            .put("brief_sha256", sha(brief)).put("output_sha256", sha(text))
+            .put("chars_per_sec", if (elapsedMs > 0) text.length * 1000.0 / elapsedMs else 0.0)
+        File(folder, "results.jsonl").appendText(obj.toString() + "\n", Charsets.UTF_8)
+        return obj
+    }
+
+    fun recent(context: Context, limit: Int = 20): List<JSONObject> {
+        val file = File(File(context.filesDir, "writing-tests"), "results.jsonl")
+        if (!file.isFile) return emptyList()
+        return file.readLines().takeLast(limit).asReversed().mapNotNull {
+            runCatching { JSONObject(it) }.getOrNull()
+        }
+    }
+
+    fun exportSummary(context: Context): String = buildString {
+        appendLine("Asterion Writing — private device benchmark summary")
+        appendLine("No output text included")
+        recent(context, 30).forEach { obj ->
+            appendLine(obj.optString("id") + " | " + obj.optString("model") +
+                " | " + obj.optString("status") + " | " + obj.optInt("words") + " words | " +
+                obj.optLong("elapsed_ms") + " ms | " +
+                obj.optDouble("chars_per_sec").toInt() + " chars/s")
+        }
+    }
+
+    private fun sha(text: String): String =
+        MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+}
