@@ -159,6 +159,23 @@ class WriterWorkspaceStore(private val context: Context) {
             "Advance the next conflict", w.chapterPlan, w.profile, w.id, w.chapterIndex + 1)
         return next
     }
+    /** Restoring a historical text makes a new editable fork; never rewrites the original. */
+    @Synchronized fun forkRevision(id: String, revisionName: String): WriterWorkspace {
+        require(revisionName.matches(Regex("[0-9]{10,20}-[a-f0-9]{12}\\.txt"))) {
+            "Invalid revision identity"
+        }
+        val original = requireNotNull(get(id))
+        val revision = File(File(workspaceDir(id), "revisions"), revisionName)
+        require(revision.isFile) { "Revision file is not available" }
+        val next = create(original.universe, original.series, original.volume,
+            original.chapter + " — restored revision", original.premise,
+            original.cast, original.canon, original.sceneObjective,
+            original.chapterPlan, original.profile,
+            original.parentChapterId, original.chapterIndex)
+        autosave(next.id, revision.readText(Charsets.UTF_8))
+        return next
+    }
+
     @Synchronized fun fork(id: String): WriterWorkspace {
         val original = requireNotNull(get(id))
         val next = create(original.universe, original.series, original.volume,
