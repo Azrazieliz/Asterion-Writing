@@ -746,7 +746,18 @@ class MainActivity : Activity() {
                 }))
             }
             if (w.id == prefs.getString("active_workspace_id", null)) {
-                group(label("Stored revisions: " + store.revisions(w.id).size, 12f, muted))
+                val history = store.revisions(w.id)
+                group(label("Stored revisions: " + history.size, 12f, muted))
+                history.take(5).forEach { revision ->
+                    group(button("Restore archived draft " + revision.name.substringBefore('-'), {
+                        if (busy) { info("Stop generation before restoring"); return@button }
+                        try {
+                            restoreWorkspace(store.forkRevision(w.id, revision.name))
+                            tab = 0; build()
+                            info("Historical draft restored as a new editable fork")
+                        } catch (e: Exception) { info("Revision recovery failed: ${e.message}") }
+                    }))
+                }
             }
             group(label("────────────────────────", 12f, muted))
         }
