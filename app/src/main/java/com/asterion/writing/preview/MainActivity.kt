@@ -273,6 +273,7 @@ class MainActivity : Activity() {
         group(button("Continue chapter from saved text", { generate(true) }))
         group(button("Stop after current token", { generation?.cancel(); info("Stopping; draft checkpoint will be preserved.") }))
         group(button("Edit or revise chapter", { editChapter() }))
+        group(button("Rewrite an excerpt with the loaded model", { rewritePassage() }))
         group(button("Review and approve draft", { tab = 3; build() }))
         group(label("LIVE CHAPTER DRAFT", 18f, white, true))
         group(label("Continuations append to the saved draft; they do not reproduce hidden model state or pretend to resume mid-token.", 12f, muted))
@@ -669,6 +670,98 @@ class MainActivity : Activity() {
                 } catch (e: Exception) { info("Edit was not saved: ${e.message}") }
             }
             .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun rewritePassage() {
+        if (busy) { info("Wait for the current generation to finish"); return }
+        if (engine == null || loaded == null) { info("Load a local writing model first"); return }
+        if (generated.isBlank()) { info("Generate or open a chapter first"); return }
+        val id = prefs.getString("active_workspace_id", null)
+        if (id != null && WriterWorkspaceStore(this).get(id)?.approved == true) {
+            info("Accepted chapters cannot be edited; fork a revision"); return
+        }
+        val pane = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        pane.addView(label("Paste an EXACT excerpt from the existing chapter", 13f, muted))
+        val excerpt = field("", 5, "Existing paragraph to improve")
+        pane.addView(excerpt)
+        pane.addView(label("Revision goal", 13f, muted))
+        val goal = field("Improve the prose and dialogue while preserving facts and consequences", 3)
+        pane.addView(goal)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Targeted scene revision")
+            .setView(ScrollView(this).apply { addView(pane) })
+            .setPositiveButton("Generate alternative") { _, _ ->
+                runRewrite(excerpt.text.toString(), goal.text.toString())
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun runRewrite(excerpt: String, instruction: String) {
+        val active = engine ?: return
+        val selection = excerpt.trim()
+        if (selection.length < 30 || selection.length > 6000 || instruction.isBlank()) {
+            info("Choose a passage of 30–6000 characters and provide a revision goal"); return
+        }
+        if (!generated.contains(selection)) {
+            info("The selected passage must match the current draft exactly"); return
+        }
+        if (busy) return
+        val sampling = try { WritingSampling.from(prefs) }
+        catch(e: Exception) { info("Sampling settings invalid: ${e.message}"); return }
+        busy = true
+        generation = scope.launch {
+            val replacement = StringBuilder()
+            var failure: String? = null
+            try {
+                withContext(Dispatchers.IO) {
+                    active.configureSampler(sampling.temperature, sampling.topP, sampling.minP,
+                        sampling.repetition, sampling.seed)
+                    active.resetSession(WritingTestBench.SYSTEM_PROMPT)
+                }
+                val context = "Chapter: " + chapterTitle +
+                    "\nEstablished canon: " + canon +
+                    "\nKnown cast: " + cast +
+                    "\nSurrounding prose: " + generated.takeLast(1600)
+                val task = "Revise ONLY the quoted excerpt, preserving story facts and chronology. " +
+                    "Return replacement prose only; no explanation.\n" +
+                    "Revision instruction: " + instruction +
+                    "\n" + context + "\nExcerpt to rewrite:\n" + selection
+                active.sendUserPrompt(task, minOf(tokenCap, 1536)).collect { piece ->
+                    replacement.append(piece)
+                }
+            } catch (e: CancellationException) {
+                failure = "Revision was cancelled"
+            } catch (e: Throwable) {
+                failure = e.message ?: e.javaClass.simpleName
+            } finally {
+                busy = false
+            }
+            if (failure != null) { info(failure!!); return@launch }
+            val revision = replacement.toString().trim()
+            if (revision.isBlank()) { info("The model returned no revision"); return@launch }
+            val resultView = label(revision, 15f).apply { setTextIsSelectable(true) }
+            android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle("Review the proposed revision")
+                .setView(ScrollView(this@MainActivity).apply {
+                    setPadding(dp(18), dp(6), dp(18), dp(6)); addView(resultView)
+                })
+                .setPositiveButton("Replace excerpt") { _, _ ->
+                    try {
+                        if (!generated.contains(selection)) error("The original excerpt changed; revision not applied")
+                        val id = prefs.getString("active_workspace_id", null)
+                        if (id != null && WriterWorkspaceStore(this@MainActivity).get(id)?.approved == true)
+                            error("Accepted chapter is locked")
+                        val next = generated.replaceFirst(selection, revision)
+                        if (id != null) WriterWorkspaceStore(this@MainActivity).saveRevision(id, next)
+                        generated = next
+                        WritingTestBench.checkpoint(this@MainActivity, next)
+                        prefs.edit().putString("generated", next).apply()
+                        outputView?.text = next
+                        info("Revised excerpt saved; previous manuscript retained as a revision")
+                    } catch (e: Exception) { info("Revision not applied: ${e.message}") }
+                }.setNegativeButton("Discard suggestion", null).show()
+        }
     }
 
     private fun resultsPage() {
