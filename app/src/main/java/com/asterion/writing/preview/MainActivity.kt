@@ -356,6 +356,17 @@ class MainActivity : Activity() {
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 45 && resultCode == RESULT_OK && data?.data != null) {
+            try {
+                val target = data.data!!
+                contentResolver.openOutputStream(target, "wt")?.bufferedWriter(Charsets.UTF_8)?.use {
+                    it.write("# " + chapterTitle.ifBlank { "Untitled chapter" } + "\n\n")
+                    it.write(generated)
+                } ?: error("The selected document provider did not open")
+                info("Manuscript exported to the selected Android document provider")
+            } catch (e: Exception) { info("Export failed: ${e.message}") }
+            return
+        }
         if (requestCode != 44 || resultCode != RESULT_OK || data?.data == null) return
         val uri = data.data!!
         val name = android.provider.OpenableColumns.DISPLAY_NAME.let { key ->
@@ -579,7 +590,10 @@ class MainActivity : Activity() {
         group(label("Multiple independent projects, chapters and revisions. Manuscripts stay private; explicit Nexus publication is not connected.", 13f, muted))
         group(button("New original project", {
             if (busy) { info("Stop generation before switching projects"); return@button }
-            prefs.edit().remove("active_workspace_id").apply()
+            if (prefs.getString("active_workspace_id", null) == null && generated.isNotBlank())
+                WritingTestBench.archiveDraft(this, generated)
+            prefs.edit().remove("active_workspace_id").putString("generated", "").apply()
+            WritingTestBench.checkpoint(this, "")
             projectTitle = ""; seriesTitle = ""; volumeTitle = ""; chapterTitle = ""
             cast = ""; canon = ""; sceneObjective = ""; chapterPlan = ""
             prompt = ""; generated = ""; tab = 0; build()
@@ -643,6 +657,44 @@ class MainActivity : Activity() {
     }
 
     private fun resultsPage() {
+        group(label("EDITORIAL DESK", 18f, white, true))
+        val workspace = prefs.getString("active_workspace_id", null)?.let {
+            WriterWorkspaceStore(this).get(it)
+        }
+        val issues = NarrativeController().reviewChapter(generated).codes
+        group(label("Chapter: " + chapterTitle.ifBlank { "Untitled" } +
+            " · " + generated.trim().split(Regex("\\s+")).count { it.isNotEmpty() } + " words", 14f, mint, true))
+        if (issues.isNotEmpty()) {
+            group(label("Review findings: " + issues.joinToString(", "), 12f, muted))
+        } else group(label("No deterministic structural issues detected; human literary review is still required.", 12f, mint))
+        group(button("Edit manuscript", { editChapter() }))
+        group(button("Share draft with compatible reader / Nexus", { shareDraft() }))
+        group(button("Export chapter as Markdown through Android files", {
+            if (generated.isBlank()) { info("No prose to export"); return@button }
+            val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("text/markdown")
+                .putExtra(Intent.EXTRA_TITLE,
+                    (chapterTitle.ifBlank { "asterion-chapter" }.replace(Regex("[^A-Za-z0-9._-]"), "_")) + ".md")
+            startActivityForResult(i, 45)
+        }))
+        group(button("Approve and lock this chapter locally", {
+            try {
+                val id = workspace?.id ?: error("Save the chapter to a project before approving")
+                if (issues.any { it == "SHORT_DRAFT" || it == "REPEATED_PARAGRAPH" ||
+                        it == "REPEATED_SCENE_START" }) error("Resolve blocking structural findings first")
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Approve chapter?")
+                    .setMessage("Locks the local manuscript and establishes editorial acceptance. This does NOT publish to Nexus.")
+                    .setPositiveButton("Approve") { _, _ ->
+                        try {
+                            WriterWorkspaceStore(this).approve(id)
+                            info("Chapter accepted and locked; fork a revision to make changes")
+                            build()
+                        } catch (e: Exception) { info("Approval failed: ${e.message}") }
+                    }.setNegativeButton("Cancel", null).show()
+            } catch (e: Exception) { info("Cannot approve: ${e.message}") }
+        }, true))
         group(label("MODEL COMPARISON RESULTS", 17f, white, true))
         group(label("Private results stored on-device. Characters/s is a measured display rate, not native tokens/s.", 12f, muted))
         group(button("Share results summary (without private story text)", {
