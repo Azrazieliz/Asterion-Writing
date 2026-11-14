@@ -6,8 +6,8 @@ android {
         applicationId = "com.asterion.writing.bench"
         minSdk = 29
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0-test"
+        versionCode = 3
+        versionName = "0.3.0-real-story-preview"
         ndk { abiFilters += "arm64-v8a" }
     }
     buildTypes {
