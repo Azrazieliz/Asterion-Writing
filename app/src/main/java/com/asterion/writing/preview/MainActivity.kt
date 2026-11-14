@@ -147,7 +147,7 @@ class MainActivity : Activity() {
         group(repoText!!)
         group(button("List available GGUF checkpoints", {
             val repo = repoText?.text.toString()
-            asyncRequest("Finding GGUF files") { HuggingFaceCatalog.ggufs(repo) } { data ->
+            asyncRequest("Finding GGUF files", { HuggingFaceCatalog.ggufs(repo) }) { data ->
                 files = data; selectedFile = data.firstOrNull(); prefs.edit().putString("repo", HuggingFaceCatalog.normalizeRepo(repo)).apply()
                 info("Found ${data.size} GGUF checkpoints"); build()
             }
@@ -202,14 +202,14 @@ class MainActivity : Activity() {
             contentResolver.query(uri, arrayOf(key), null, null, null)?.use { c -> if(c.moveToFirst()) c.getString(0) else null }
         } ?: "imported.gguf"
         if (!name.endsWith(".gguf", true)) { info("Select a .gguf model file"); return }
-        asyncRequest("Importing model") {
+        asyncRequest("Importing model", {
             val dest = File(ModelDownloadService.modelsDir(this), "import_" + name.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_"))
             val stage = File(dest.path+".part")
             contentResolver.openInputStream(uri)!!.use { input -> stage.outputStream().use { input.copyTo(it, 1024*1024) } }
             require(stage.inputStream().use { it.readNBytes(4) }.contentEquals(byteArrayOf(71,71,85,70))) { "Not a GGUF file" }
             require(stage.renameTo(dest)) { "Cannot commit imported model" }
             dest.name
-        } { s -> info("Imported $s"); build() }
+        }) { s -> info("Imported $s"); build() }
     }
     private fun loadModel(file: File) {
         if (busy) { info("Another operation is running"); return }
