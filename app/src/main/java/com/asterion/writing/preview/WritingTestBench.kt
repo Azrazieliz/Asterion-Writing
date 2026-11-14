@@ -102,6 +102,32 @@ object WritingTestBench {
         }
     }
 
+    val QUALITY_AXES = listOf(
+        "Originality", "Prose", "Characterization", "Dialogue",
+        "Causality", "Continuity", "Pacing", "Engagement"
+    )
+
+    /** Human assessment of actual prose, never a fabricated model quality score. */
+    fun rateRun(context: Context, runId: String, scores: Map<String, Int>) {
+        require(runId.matches(Regex("[0-9]{10,20}"))) { "Invalid benchmark run ID" }
+        require(recent(context, 200).any { it.optString("id") == runId }) { "Unknown benchmark result" }
+        require(scores.keys.containsAll(QUALITY_AXES))
+        require(scores.values.all { it in 1..5 })
+        val folder = File(context.filesDir, "writing-tests").apply { mkdirs() }
+        val j = JSONObject().put("id", runId).put("at", System.currentTimeMillis())
+        val axes = JSONObject()
+        QUALITY_AXES.forEach { axes.put(it, scores[it] ?: error("Missing axis")) }
+        j.put("scores", axes)
+        File(folder, "human-ratings.jsonl").appendText(j.toString() + "\n", Charsets.UTF_8)
+    }
+
+    fun rating(context: Context, runId: String): JSONObject? {
+        val file = File(File(context.filesDir, "writing-tests"), "human-ratings.jsonl")
+        if (!file.isFile) return null
+        return file.useLines { lines -> lines.mapNotNull { runCatching { JSONObject(it) }.getOrNull() }
+            .filter { it.optString("id") == runId }.lastOrNull() }
+    }
+
     fun exportSummary(context: Context): String = buildString {
         appendLine("Asterion Writing — private device benchmark summary")
         appendLine("No output text included")
