@@ -44,6 +44,7 @@ class MainActivity : Activity() {
     private var busy = false
     private var generation: Job? = null
     private var loaded: String? = null
+    private var activeAdapter: String? = null
     private var engine: InferenceEngine? = null
     private var prompt = "Invent an original fantasy web novel with complex characters, layered consequences, mature themes, and a distinctive world. Begin with a consequential scene."
     private var canon = ""
@@ -201,7 +202,8 @@ class MainActivity : Activity() {
         objectiveInput.addTextChangedListener(watcher { sceneObjective = it; prefs.edit().putString("scene_objective", it).apply() })
         group(objectiveInput)
         val model = loaded ?: "No model loaded"
-        group(label("Active model: $model", 13f, if (loaded == null) muted else mint))
+        group(label("Active model: $model" +
+            (activeAdapter?.let { " · LoRA: $it" } ?: ""), 13f, if (loaded == null) muted else mint))
         group(button("Manage or load models", { tab = 2; build() }))
         group(button("Use standardized A/B story test", { prompt = WritingTestBench.STANDARD_BRIEF; prefs.edit().putString("prompt", prompt).apply(); build() }))
         group(label("PREMISE & WRITING DIRECTION", 14f, mint, true))
@@ -335,6 +337,29 @@ class MainActivity : Activity() {
             !ModelDownloadService.isRunning()
         group(resumeDownloadButton!!)
         group(label("The resume action uses the actual saved download, even after restarting this screen.", 12f, muted))
+        group(label("LOCAL GGUF WRITER ADAPTERS", 17f, white, true))
+        group(label("Optional specialist LoRA in compatible GGUF format. The base model and adapter must match; no silent fallback.", 12f, muted))
+        val adaptersDir = File(filesDir, "writer-adapters").apply { mkdirs() }
+        val adapters = adaptersDir.listFiles()?.filter { it.isFile && it.extension.equals("gguf", true) }
+            ?.sortedBy { it.name } ?: emptyList()
+        val adapterChoices = listOf("No adapter") + adapters.map { it.name }
+        val adapterSpinner = Spinner(this)
+        adapterSpinner.adapter = spinnerAdapter(adapterChoices)
+        val preferredAdapter = prefs.getString("selected_adapter", "") ?: ""
+        adapterSpinner.setSelection(adapterChoices.indexOf(preferredAdapter).coerceAtLeast(0))
+        adapterSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                val choice = if (pos == 0) "" else adapterChoices[pos]
+                prefs.edit().putString("selected_adapter", choice).apply()
+            }
+        }
+        group(adapterSpinner)
+        group(button("Import a local GGUF LoRA adapter", {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+            startActivityForResult(intent, 46)
+        }))
+        group(label("Choose an adapter before loading its matching base model; activating a different adapter requires reloading the base.", 12f, muted))
         group(label("LOCAL MODELS", 17f, white, true))
         val local = ModelDownloadService.modelsDir(this).listFiles()?.filter { it.extension.equals("gguf", true) }?.sortedBy { it.name } ?: emptyList()
         if (local.isEmpty()) group(label("No installed GGUF model yet", 13f, muted))
@@ -368,6 +393,10 @@ class MainActivity : Activity() {
             } catch (e: Exception) { info("Export failed: ${e.message}") }
             return
         }
+        if (requestCode == 46 && resultCode == RESULT_OK && data?.data != null) {
+            importAdapter(data.data!!)
+            return
+        }
         if (requestCode != 44 || resultCode != RESULT_OK || data?.data == null) return
         val uri = data.data!!
         val name = android.provider.OpenableColumns.DISPLAY_NAME.let { key ->
@@ -383,9 +412,41 @@ class MainActivity : Activity() {
             dest.name
         }) { s -> info("Imported $s"); build() }
     }
+    private fun importAdapter(uri: android.net.Uri) {
+        asyncRequest("Importing and checking specialist adapter", {
+            val root = File(filesDir, "writer-adapters").apply { mkdirs() }
+            val display = contentResolver.query(uri,
+                arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            } ?: "writer-adapter.gguf"
+            require(display.endsWith(".gguf", ignoreCase = true)) { "The adapter must be GGUF" }
+            val filename = display.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            val target = File(root, filename)
+            require(!target.exists()) { "Adapter already imported" }
+            val partial = File(root, filename + ".part")
+            try {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    partial.outputStream().use { output -> input.copyTo(output, 1024 * 1024) }
+                } ?: error("Cannot open selected adapter")
+                require(partial.length() > 4096L && partial.inputStream().use {
+                    it.readNBytes(4).contentEquals(byteArrayOf(71, 71, 85, 70))
+                }) { "Adapter is not a valid GGUF file" }
+                require(partial.renameTo(target)) { "Cannot finalize adapter" }
+                filename
+            } finally { if (partial.exists()) partial.delete() }
+        }) { name ->
+            prefs.edit().putString("selected_adapter", name).apply()
+            info("Adapter imported: $name. Reload compatible base to activate.")
+            build()
+        }
+    }
+
     private fun loadModel(file: File) {
         if (busy) { info("Another operation is running"); return }
         busy = true; info("Loading ${file.name} — memory intensive")
+        val adapterName = prefs.getString("selected_adapter", "") ?: ""
+        val adapterPath = if (adapterName.isBlank()) null else
+            File(File(filesDir, "writer-adapters"), adapterName)
         scope.launch {
             try {
                 val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -400,10 +461,18 @@ class MainActivity : Activity() {
                     candidate.state.first { it is InferenceEngine.State.Initialized || it is InferenceEngine.State.Error }
                     require(candidate.state.value is InferenceEngine.State.Initialized) { "Native engine failed to initialize" }
                     candidate.loadModel(file.absolutePath, contextCap)
+                    if (adapterPath != null) {
+                        require(adapterPath.isFile) { "Selected GGUF LoRA adapter is unavailable" }
+                        candidate.loadAdapter(adapterPath.absolutePath)
+                    }
                     candidate.setSystemPrompt(WritingTestBench.SYSTEM_PROMPT)
                     engine = candidate
                 }
-                loaded = file.name; info("Loaded ${file.name} · CPU native engine ready"); build()
+                loaded = file.name
+                activeAdapter = adapterName.takeIf { it.isNotBlank() }
+                info("Loaded ${file.name}" + (activeAdapter?.let { " with LoRA $it" } ?: "") +
+                    " · CPU native engine ready")
+                build()
             } catch (e: Throwable) { info("Model load failed: ${e.message ?: e.javaClass.simpleName}") }
             finally { busy = false }
         }
@@ -411,7 +480,8 @@ class MainActivity : Activity() {
     private fun unloadModel() {
         if (busy) { info("Wait for generation or loading to finish"); return }
         scope.launch { busy = true; try { withContext(Dispatchers.IO) { engine?.cleanUp() }; loaded = null; info("Model unloaded"); build() }
-            catch(e: Throwable) { info("Unload error: ${e.message}") } finally { busy = false } }
+            catch(e: Throwable) { info("Unload error: ${e.message}") }
+            finally { activeAdapter = null; busy = false } }
     }
     private fun generate(continueExisting: Boolean) {
         val active = engine
