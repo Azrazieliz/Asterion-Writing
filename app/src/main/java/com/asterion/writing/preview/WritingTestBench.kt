@@ -57,6 +57,19 @@ object WritingTestBench {
         check(next.renameTo(current)) { "Could not save chapter checkpoint" }
     }
 
+    fun readCheckpoint(context: Context): String {
+        val file = File(context.filesDir, "writer-drafts/active.txt")
+        return if (file.isFile) runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("") else ""
+    }
+
+    /** Never destroy the previous draft when starting a fresh chapter trial. */
+    fun archiveDraft(context: Context, text: String) {
+        if (text.isBlank()) return
+        val directory = File(context.filesDir, "writer-drafts").apply { mkdirs() }
+        val file = File(directory, "draft-" + System.currentTimeMillis() + ".txt")
+        file.writeText(text, Charsets.UTF_8)
+    }
+
     /** A run is stored privately, never in a public GitHub repository or remote inference service. */
     fun saveRun(
         context: Context, model: String, brief: String, text: String, sampling: WritingSampling,
