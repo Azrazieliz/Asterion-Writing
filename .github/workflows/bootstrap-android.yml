@@ -1,0 +1,33 @@
+name: Unpack Asterion Writing Android sources
+on:
+  push:
+    paths:
+      - '.bootstrap/android-sources.xz.b64'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Expand versioned source bundle
+        run: |
+          python3 - <<'PY'
+          import base64, json, lzma
+          from pathlib import Path
+          src = Path('.bootstrap/android-sources.xz.b64').read_text().strip()
+          data = json.loads(lzma.decompress(base64.b64decode(src)).decode('utf-8'))
+          for name, contents in data.items():
+              assert not name.startswith('/') and '..' not in Path(name).parts
+              out=Path(name); out.parent.mkdir(parents=True,exist_ok=True)
+              out.write_text(contents,encoding='utf-8')
+          print('Unpacked',len(data),'Android app files')
+          PY
+      - name: Commit source tree without touching frozen core
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/android.yml app/ build.gradle.kts settings.gradle.kts gradle.properties docs/ANDROID_TEST_DELIVERY.md .gitignore
+          git commit -m "Implement Android writer test app and Hugging Face downloader" || exit 0
+          git push
