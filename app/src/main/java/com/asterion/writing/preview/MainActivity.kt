@@ -525,6 +525,123 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun restoreWorkspace(w: WriterWorkspace) {
+        projectTitle = w.universe
+        seriesTitle = w.series
+        volumeTitle = w.volume
+        chapterTitle = w.chapter
+        prompt = w.premise
+        canon = w.canon
+        cast = w.cast
+        sceneObjective = w.sceneObjective
+        chapterPlan = w.chapterPlan
+        authorProfile = w.profile
+        generated = WriterWorkspaceStore(this).draft(w.id)
+        prefs.edit().putString("active_workspace_id", w.id)
+            .putString("project_title", projectTitle)
+            .putString("series_title", seriesTitle)
+            .putString("volume_title", volumeTitle)
+            .putString("chapter_title", chapterTitle)
+            .putString("prompt", prompt)
+            .putString("canon", canon)
+            .putString("cast", cast)
+            .putString("scene_objective", sceneObjective)
+            .putString("chapter_plan", chapterPlan)
+            .putString("author_profile", authorProfile)
+            .putString("generated", generated).apply()
+    }
+
+    private fun saveCurrentWorkspace() {
+        if (busy) { info("Finish the current operation before changing the project"); return }
+        try {
+            val store = WriterWorkspaceStore(this)
+            val id = prefs.getString("active_workspace_id", null)
+            val original = id?.let { store.get(it) }
+            if (original?.approved == true) {
+                info("Approved chapter is locked. Create a revision from Library."); return
+            }
+            val w = if (original == null) store.create(
+                projectTitle, seriesTitle, volumeTitle, chapterTitle, prompt, cast, canon,
+                sceneObjective, chapterPlan, authorProfile
+            ) else store.update(original.copy(
+                universe = projectTitle, series = seriesTitle, volume = volumeTitle,
+                chapter = chapterTitle, premise = prompt, cast = cast, canon = canon,
+                sceneObjective = sceneObjective, chapterPlan = chapterPlan, profile = authorProfile
+            ))
+            store.saveRevision(w.id, generated)
+            prefs.edit().putString("active_workspace_id", w.id).apply()
+            info("Project saved locally with revision history")
+        } catch (e: Exception) { info("Save failed: ${e.message}") }
+    }
+
+    private fun workspacePage() {
+        group(label("YOUR WRITING PROJECTS", 19f, white, true))
+        group(label("Multiple independent projects, chapters and revisions. Manuscripts stay private; explicit Nexus publication is not connected.", 13f, muted))
+        group(button("New original project", {
+            if (busy) { info("Stop generation before switching projects"); return@button }
+            prefs.edit().remove("active_workspace_id").apply()
+            projectTitle = ""; seriesTitle = ""; volumeTitle = ""; chapterTitle = ""
+            cast = ""; canon = ""; sceneObjective = ""; chapterPlan = ""
+            prompt = ""; generated = ""; tab = 0; build()
+        }, true))
+        group(button("Save current project and draft", { saveCurrentWorkspace() }))
+        val store = WriterWorkspaceStore(this)
+        val projects = runCatching { store.list() }.getOrElse {
+            group(label("Workspace index could not be read: ${it.message}. Files were not erased.", 13f, muted))
+            emptyList()
+        }
+        if (projects.isEmpty()) group(label("No saved projects yet. Set your universe and chapter in Studio, then save.", 13f, muted))
+        projects.forEach { w ->
+            val active = prefs.getString("active_workspace_id", null) == w.id
+            group(label((if (active) "● " else "") + w.universe + "  /  " + w.series, 15f, mint, true))
+            group(label(w.volume + " · " + w.chapter + " · " +
+                if (w.approved) "Approved (locked)" else "Draft", 12f, muted))
+            group(button("Open this chapter", {
+                if (busy) { info("Stop generation before switching projects"); return@button }
+                restoreWorkspace(w); tab = 0; build()
+            }, active))
+            group(button("Fork to a new chapter revision", {
+                if (busy) { info("Stop generation before forking"); return@button }
+                try { restoreWorkspace(store.fork(w.id)); tab = 0; build()
+                    info("New editable revision created; original preserved") }
+                catch(e: Exception) { info("Fork failed: ${e.message}") }
+            }))
+            if (w.id == prefs.getString("active_workspace_id", null)) {
+                group(label("Stored revisions: " + store.revisions(w.id).size, 12f, muted))
+            }
+            group(label("────────────────────────", 12f, muted))
+        }
+    }
+
+    private fun editChapter() {
+        if (busy) { info("Stop generation before editing prose"); return }
+        val id = prefs.getString("active_workspace_id", null)
+        if (id != null && WriterWorkspaceStore(this).get(id)?.approved == true) {
+            info("Approved chapter is locked. Fork it from Library."); return
+        }
+        val edit = field(generated, 12, "Your actual chapter prose")
+        edit.minLines = 12
+        edit.maxLines = 26
+        val container = ScrollView(this).apply {
+            setPadding(dp(16), dp(6), dp(16), dp(6)); addView(edit)
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Edit chapter prose")
+            .setView(container)
+            .setPositiveButton("Save revision") { _, _ ->
+                try {
+                    val next = edit.text.toString()
+                    if (id != null) WriterWorkspaceStore(this).saveRevision(id, next)
+                    generated = next
+                    WritingTestBench.checkpoint(this, generated)
+                    prefs.edit().putString("generated", generated).apply()
+                    outputView?.text = generated
+                    info("Draft saved; previous revision preserved")
+                } catch (e: Exception) { info("Edit was not saved: ${e.message}") }
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
     private fun resultsPage() {
         group(label("MODEL COMPARISON RESULTS", 17f, white, true))
         group(label("Private results stored on-device. Characters/s is a measured display rate, not native tokens/s.", 12f, muted))
