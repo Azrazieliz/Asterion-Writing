@@ -50,14 +50,14 @@ jobs:
       - name: Validate specialist training script syntax
         run: python3 -m py_compile scripts/writer_specialist_pipeline.py
       - name: Build installable debug APK
-        run: gradle --no-daemon --max-workers=2 :app:assembleDebug --stacktrace
+        run: gradle --no-daemon --max-workers=2 :app:assembleAutonomousDebug --stacktrace
       - name: Verify packaged actual native inference
         run: |
-          unzip -l app/build/outputs/apk/debug/*.apk | grep -q 'libai-chat.so'
-          unzip -l app/build/outputs/apk/debug/*.apk | grep -q 'classes.dex'
+          unzip -l app/build/outputs/apk/autonomous/debug/*.apk | grep -q 'libai-chat.so'
+          unzip -l app/build/outputs/apk/autonomous/debug/*.apk | grep -q 'classes.dex'
       - uses: actions/upload-artifact@v4
         with:
-          name: Asterion-Writing-v0.5.0-Autonomous-APK
-          path: app/build/outputs/apk/debug/*.apk
+          name: Asterion-Writing-v0.5.1-SideBySide-APK
+          path: app/build/outputs/apk/autonomous/debug/*.apk
           if-no-files-found: error
           retention-days: 14
