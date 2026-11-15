@@ -67,6 +67,7 @@ class MainActivity : Activity() {
     private var resumeDownloadButton: Button? = null
     private var autonomousStatusView: TextView? = null
     private var autonomousProgress: ProgressBar? = null
+    private var readingChapterId: String? = null
     private var launchAutonomousAfterModelLoad = false
     private var showSampler = false
     private var selectedFile: ModelFile? = null
@@ -113,10 +114,12 @@ class MainActivity : Activity() {
                     if (tab == 0) {
                         val current = runCatching { AutoNovelStore(this@MainActivity).read() }.getOrNull()
                         autonomousStatusView?.text = autonomousDescription(current)
-                        autonomousProgress?.progress = if (current == null) 0 else
-                            ((current.chapterIndex - 1) * current.scenesPerChapter +
+                        autonomousProgress?.progress = if (current == null) 0
+                            else if (current.complete) autonomousProgress?.max ?: 0
+                            else (((current.volumeIndex - 1) * current.totalChapters +
+                                current.chapterIndex - 1) * current.scenesPerChapter +
                                 current.sceneIndex).coerceIn(0,
-                                current.totalChapters * current.scenesPerChapter)
+                                current.totalVolumes * current.totalChapters * current.scenesPerChapter)
                     }
                     if (tab == 2) {
                         statusView?.text = prefs.getString(ModelDownloadService.KEY_STATUS, "No active download")
@@ -201,7 +204,8 @@ class MainActivity : Activity() {
     private fun autonomousDescription(s: AutoNovelState?): String {
         if (s == null) return "Ready to create an entirely original novel."
         val title = s.title.ifBlank { "Inventing an original universe" }
-        val progress = "Chapter ${s.chapterIndex.coerceAtMost(s.totalChapters)}/${s.totalChapters}" +
+        val progress = "Volume ${s.volumeIndex}/${s.totalVolumes}" +
+            " · Chapter ${s.chapterIndex.coerceAtMost(s.totalChapters)}/${s.totalChapters}" +
             " · Scene ${s.sceneIndex.coerceAtMost(s.scenesPerChapter)}/${s.scenesPerChapter}"
         val phase = when (s.phase) {
             "CONCEPT" -> "Inventing universe, cast and central story conflict"
@@ -209,7 +213,7 @@ class MainActivity : Activity() {
             "CHAPTER_PLAN" -> "Planning chapter ${s.chapterIndex} automatically"
             "SCENE" -> "Writing actual prose · $progress"
             "RECAP" -> "Checking continuity and carrying consequences forward"
-            "COMPLETE" -> "Full first volume generated; chapters are available in Library"
+            "COMPLETE" -> "All ${s.totalVolumes} volumes generated; chapters are available in Library"
             else -> "Previous task: ${s.phase}"
         }
         return title + "\n" + phase +
@@ -232,9 +236,11 @@ class MainActivity : Activity() {
         autonomousStatusView = label(autonomousDescription(s), 15f, white, true)
         group(autonomousStatusView!!)
         autonomousProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = (s?.totalChapters ?: 8) * (s?.scenesPerChapter ?: 3)
+            max = (s?.totalVolumes ?: 3) * (s?.totalChapters ?: 8) *
+                (s?.scenesPerChapter ?: 3)
             progress = if (s?.complete == true) max
-                else ((s?.chapterIndex ?: 1) - 1) * (s?.scenesPerChapter ?: 3) +
+                else (((s?.volumeIndex ?: 1) - 1) * (s?.totalChapters ?: 8) +
+                    ((s?.chapterIndex ?: 1) - 1)) * (s?.scenesPerChapter ?: 3) +
                     (s?.sceneIndex ?: 0)
             progressTintList = android.content.res.ColorStateList.valueOf(mint)
         }
@@ -308,12 +314,14 @@ class MainActivity : Activity() {
                 try {
                     writer.run(active, sampling) { state ->
                         autonomousStatusView?.text = autonomousDescription(state)
-                        autonomousProgress?.progress =
-                            ((state.chapterIndex - 1) * state.scenesPerChapter +
+                        autonomousProgress?.progress = if (state.complete)
+                            autonomousProgress?.max ?: 0 else
+                            (((state.volumeIndex - 1) * state.totalChapters +
+                                state.chapterIndex - 1) * state.scenesPerChapter +
                                 state.sceneIndex).coerceIn(0,
-                                state.totalChapters * state.scenesPerChapter)
+                                state.totalVolumes * state.totalChapters * state.scenesPerChapter)
                     }
-                    info("Autonomous volume created. Open Library to read chapters.")
+                    info("Autonomous multi-volume novel generated. Open Library to read the chapters.")
                 } catch (_: CancellationException) {
                     info("Autonomous writing paused; chapter checkpoints preserved.")
                 } catch (error: Throwable) {
