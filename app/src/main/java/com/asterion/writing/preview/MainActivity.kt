@@ -198,7 +198,8 @@ class MainActivity : Activity() {
             1 -> workspacePage()
             2 -> modelPage()
             3 -> writerPage()
-            else -> resultsPage()
+            4 -> resultsPage()
+            else -> readChapterPage()
         }
     }
     private fun autonomousDescription(s: AutoNovelState?): String {
@@ -870,70 +871,75 @@ class MainActivity : Activity() {
     }
 
     private fun workspacePage() {
-        group(label("YOUR WRITING PROJECTS", 19f, white, true))
-        group(label("Multiple independent projects, chapters and revisions. Manuscripts stay private; explicit Nexus publication is not connected.", 13f, muted))
-        group(button("New original project", {
-            if (busy) { info("Stop generation before switching projects"); return@button }
-            if (prefs.getString("active_workspace_id", null) == null && generated.isNotBlank())
-                WritingTestBench.archiveDraft(this, generated)
-            prefs.edit().remove("active_workspace_id")
-                .remove("project_title").remove("series_title").remove("volume_title")
-                .remove("chapter_title").remove("prompt").remove("cast").remove("canon")
-                .remove("scene_objective").remove("chapter_plan")
-                .putString("generated", "").apply()
-            WritingTestBench.checkpoint(this, "")
-            projectTitle = ""; seriesTitle = ""; volumeTitle = ""; chapterTitle = ""
-            cast = ""; canon = ""; sceneObjective = ""; chapterPlan = ""
-            prompt = ""; generated = ""; tab = 0; build()
-        }, true))
-        group(button("Save current project and draft", { saveCurrentWorkspace() }))
+        group(label("YOUR NOVELS", 20f, mint, true))
+        group(label("Original volumes and chapters written by the local model. Open a chapter to read it; no manual authoring is required.", 13f, muted))
+        group(button("Back to autonomous creation", { tab = 0; build() }, true))
         val store = WriterWorkspaceStore(this)
-        val projects = runCatching { store.list() }.getOrElse {
-            group(label("Workspace index could not be read: ${it.message}. Files were not erased.", 13f, muted))
+        val chapters = runCatching { store.list() }.getOrElse {
+            group(label("Library index could not be read: ${it.message}. No files were deleted.", 13f, muted))
             emptyList()
         }
-        if (projects.isEmpty()) group(label("No saved projects yet. Set your universe and chapter in Studio, then save.", 13f, muted))
-        projects.forEach { w ->
-            val active = prefs.getString("active_workspace_id", null) == w.id
-            group(label((if (active) "● " else "") + w.universe + "  /  " + w.series, 15f, mint, true))
-            group(label(w.volume + " · " + w.chapter + " · " +
-                if (w.approved) "Approved (locked)" else "Draft", 12f, muted))
-            group(button("Open this chapter", {
-                if (busy) { info("Stop generation before switching projects"); return@button }
-                restoreWorkspace(w); tab = 0; build()
-            }, active))
-            group(button("Fork to a new chapter revision", {
-                if (busy) { info("Stop generation before forking"); return@button }
-                try { restoreWorkspace(store.fork(w.id)); tab = 0; build()
-                    info("New editable revision created; original preserved") }
-                catch(e: Exception) { info("Fork failed: ${e.message}") }
-            }))
-            if (w.approved) {
-                group(label("Accepted consequence: " + w.acceptedOutcome, 12f, muted))
-                group(button("Create next chapter in this series", {
-                    if (busy) { info("Stop generation before changing chapters"); return@button }
-                    try {
-                        restoreWorkspace(store.nextChapter(w.id)); tab = 0; build()
-                        info("Next chapter created with accepted continuity")
-                    } catch (e: Exception) { info("Next chapter unavailable: ${e.message}") }
-                }))
-            }
-            if (w.id == prefs.getString("active_workspace_id", null)) {
-                val history = store.revisions(w.id)
-                group(label("Stored revisions: " + history.size, 12f, muted))
-                history.take(5).forEach { revision ->
-                    group(button("Restore archived draft " + revision.name.substringBefore('-'), {
-                        if (busy) { info("Stop generation before restoring"); return@button }
-                        try {
-                            restoreWorkspace(store.forkRevision(w.id, revision.name))
-                            tab = 0; build()
-                            info("Historical draft restored as a new editable fork")
-                        } catch (e: Exception) { info("Revision recovery failed: ${e.message}") }
-                    }))
-                }
-            }
-            group(label("────────────────────────", 12f, muted))
+        if (chapters.isEmpty()) {
+            group(label("Your generated story will appear here automatically as chapters are written.", 14f, white))
         }
+        var lastSeries = ""
+        var lastVolume = ""
+        chapters.sortedWith(compareBy<WriterWorkspace> { it.universe }
+            .thenBy { it.series }.thenBy { it.volume }
+            .thenBy { it.chapterIndex }).forEach { chapter ->
+            val seriesKey = chapter.universe + "/" + chapter.series
+            val volumeKey = seriesKey + "/" + chapter.volume
+            if (seriesKey != lastSeries) {
+                group(label(chapter.universe + " · " + chapter.series, 16f, mint, true))
+                lastSeries = seriesKey
+                lastVolume = ""
+            }
+            if (volumeKey != lastVolume) {
+                group(label(chapter.volume, 14f, muted, true))
+                lastVolume = volumeKey
+            }
+            val existingText = runCatching { store.draft(chapter.id) }.getOrDefault("")
+            val words = existingText.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
+            val stage = if (chapter.approved) "Editorially accepted" else
+                if (existingText.isBlank()) "Planned" else "Generated draft"
+            group(button("Chapter ${chapter.chapterIndex} · ${chapter.chapter}  ($words words)", {
+                readingChapterId = chapter.id
+                tab = 5; build()
+            }))
+            group(label(stage, 11f, muted))
+        }
+    }
+
+    private fun readChapterPage() {
+        val id = readingChapterId
+        val store = WriterWorkspaceStore(this)
+        val w = id?.let { store.get(it) }
+        if (w == null) {
+            group(label("The selected chapter is unavailable; no files have been changed.", 13f, muted))
+            group(button("Back to library", { tab = 1; build() }, true))
+            return
+        }
+        group(button("Back to library", { tab = 1; build() }))
+        group(label(w.universe + " / " + w.series, 12f, mint))
+        group(label(w.volume, 14f, muted))
+        group(label("CHAPTER ${w.chapterIndex} · ${w.chapter}", 19f, white, true))
+        val prose = runCatching { store.draft(w.id) }.getOrElse {
+            group(label("Could not read this manuscript: ${it.message}", 13f, muted))
+            ""
+        }
+        group(label(if (prose.isBlank()) "This chapter is being planned." else prose, 15f, white)
+            .apply { setTextIsSelectable(true) })
+        group(button("Share this chapter", {
+            if (prose.isBlank()) { info("No prose written yet"); return@button }
+            val share = Intent(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_SUBJECT, w.chapter)
+                .putExtra(Intent.EXTRA_TEXT, prose)
+            startActivity(Intent.createChooser(share, "Share chapter"))
+        }))
+        group(button("Advanced revision tools (optional)", {
+            if (busy) { info("Pause generation before editing a manuscript"); return@button }
+            restoreWorkspace(w); tab = 3; build()
+        }))
     }
 
     private fun editChapter() {
