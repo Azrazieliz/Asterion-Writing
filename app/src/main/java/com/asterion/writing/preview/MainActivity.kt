@@ -65,6 +65,9 @@ class MainActivity : Activity() {
     private var sceneObjective = ""
     private var downloadProgressView: ProgressBar? = null
     private var resumeDownloadButton: Button? = null
+    private var autonomousStatusView: TextView? = null
+    private var autonomousProgress: ProgressBar? = null
+    private var launchAutonomousAfterModelLoad = false
     private var showSampler = false
     private var selectedFile: ModelFile? = null
     private var files: List<ModelFile> = emptyList()
@@ -101,6 +104,14 @@ class MainActivity : Activity() {
         handler.post(object: Runnable {
             override fun run() {
                 if (!isFinishing) {
+                    if (tab == 0) {
+                        val current = runCatching { AutoNovelStore(this@MainActivity).read() }.getOrNull()
+                        autonomousStatusView?.text = autonomousDescription(current)
+                        autonomousProgress?.progress = if (current == null) 0 else
+                            ((current.chapterIndex - 1) * current.scenesPerChapter +
+                                current.sceneIndex).coerceIn(0,
+                                current.totalChapters * current.scenesPerChapter)
+                    }
                     if (tab == 2) {
                         statusView?.text = prefs.getString(ModelDownloadService.KEY_STATUS, "No active download")
                         downloadProgressView?.progress = prefs.getInt(ModelDownloadService.KEY_PROGRESS, 0)
@@ -157,13 +168,13 @@ class MainActivity : Activity() {
         val outer = LinearLayout(this); outer.orientation = LinearLayout.VERTICAL; outer.setBackgroundColor(bg)
         val header = LinearLayout(this); header.orientation = LinearLayout.VERTICAL; header.setPadding(dp(20), dp(12), dp(20), dp(4))
         header.addView(label("ASTERION  /  WRITER", 23f, mint, true))
-        header.addView(label("LOCAL FICTION STUDIO  ·  REAL MODEL INFERENCE", 11f, muted))
+        header.addView(label("AUTONOMOUS NOVEL PRODUCTION  ·  ON-DEVICE", 11f, muted))
         outer.addView(header)
         val nav = LinearLayout(this); nav.setPadding(dp(12), 0, dp(12), 0)
-        val w = button("STUDIO", { tab = 0; build() }, tab == 0)
+        val w = button("CREATE", { tab = 0; build() }, tab == 0)
         val l = button("LIBRARY", { tab = 1; build() }, tab == 1)
         val m = button("MODELS", { tab = 2; build() }, tab == 2)
-        val r = button("REVIEW", { tab = 3; build() }, tab == 3)
+        val r = button("TESTING", { tab = 3; build() }, tab == 3)
         nav.addView(w, LinearLayout.LayoutParams(0, dp(52), 1f))
         nav.addView(l, LinearLayout.LayoutParams(0, dp(52), 1f))
         nav.addView(m, LinearLayout.LayoutParams(0, dp(52), 1f))
@@ -173,11 +184,19 @@ class MainActivity : Activity() {
         content = LinearLayout(this); content.orientation = LinearLayout.VERTICAL; content.setPadding(dp(20), dp(8), dp(20), dp(36))
         scroll.addView(content); outer.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(outer)
-        when(tab) { 0 -> writerPage(); 1 -> workspacePage(); 2 -> modelPage(); else -> resultsPage() }
+        when(tab) {
+            0 -> autonomousPage()
+            1 -> workspacePage()
+            2 -> modelPage()
+            3 -> writerPage()
+            else -> resultsPage()
+        }
     }
     private fun writerPage() {
-        group(label("CHAPTER STUDIO", 18f, white, true))
-        group(label("Write a real chapter with scene continuity and recoverable drafts. Tests remain private; Nexus integration is not yet connected.", 13f, muted))
+        group(label("MANUAL TESTING & ADVANCED EDITOR", 18f, white, true))
+        group(label("Optional diagnostics only. Normal novel creation is fully automatic in Create; none of these fields are required.", 13f, muted))
+        group(button("Back to autonomous creation", { tab = 0; build() }))
+        group(button("Quality and editorial review", { tab = 4; build() }))
         group(label("STORY PROJECT", 14f, mint, true))
         val projectInput = field(projectTitle, 1, "Universe / series title")
         projectInput.addTextChangedListener(watcher { projectTitle = it; prefs.edit().putString("project_title", it).apply() })
@@ -298,7 +317,7 @@ class MainActivity : Activity() {
         group(button("Stop after current token", { generation?.cancel(); info("Stopping; draft checkpoint will be preserved.") }))
         group(button("Edit or revise chapter", { editChapter() }))
         group(button("Rewrite an excerpt with the loaded model", { rewritePassage() }))
-        group(button("Review and approve draft", { tab = 3; build() }))
+        group(button("Review and approve draft", { tab = 4; build() }))
         group(label("LIVE CHAPTER DRAFT", 18f, white, true))
         group(label("Continuations append to the saved draft; they do not reproduce hidden model state or pretend to resume mid-token.", 12f, muted))
         outputView = label(generated.ifBlank { "Your generated prose will appear here. No synthetic sample text is displayed." }, 15f)
