@@ -39,6 +39,8 @@ data class AutoNovelState(
     val chapterPlan: String = "",
     val storySoFar: String = "",
     val chapterIndex: Int = 1,
+    val volumeIndex: Int = 1,
+    val totalVolumes: Int = 3,
     val sceneIndex: Int = 0,
     val totalChapters: Int = 8,
     val scenesPerChapter: Int = 3,
@@ -64,7 +66,10 @@ class AutoNovelStore(context: Context) {
             premise = j.optString("premise"), cast = j.optString("cast"),
             worldRules = j.optString("worldRules"), volumeArc = j.optString("volumeArc"),
             chapterPlan = j.optString("chapterPlan"), storySoFar = j.optString("storySoFar"),
-            chapterIndex = j.optInt("chapterIndex", 1), sceneIndex = j.optInt("sceneIndex", 0),
+            chapterIndex = j.optInt("chapterIndex", 1),
+            volumeIndex = j.optInt("volumeIndex", 1),
+            totalVolumes = j.optInt("totalVolumes", 3),
+            sceneIndex = j.optInt("sceneIndex", 0),
             totalChapters = j.optInt("totalChapters", 8),
             scenesPerChapter = j.optInt("scenesPerChapter", 3),
             workspaceId = j.optString("workspaceId"), lastError = j.optString("lastError"),
@@ -81,7 +86,9 @@ class AutoNovelStore(context: Context) {
             .put("cast", update.cast).put("worldRules", update.worldRules)
             .put("volumeArc", update.volumeArc).put("chapterPlan", update.chapterPlan)
             .put("storySoFar", update.storySoFar)
-            .put("chapterIndex", update.chapterIndex).put("sceneIndex", update.sceneIndex)
+            .put("chapterIndex", update.chapterIndex)
+            .put("volumeIndex", update.volumeIndex).put("totalVolumes", update.totalVolumes)
+            .put("sceneIndex", update.sceneIndex)
             .put("totalChapters", update.totalChapters).put("scenesPerChapter", update.scenesPerChapter)
             .put("workspaceId", update.workspaceId).put("lastError", update.lastError)
             .put("lastUpdated", update.lastUpdated)
@@ -122,6 +129,7 @@ class AutonomousNovelEngine(private val context: Context) {
         var s = requireNotNull(states.read()) { "Create an autonomous project first" }
         require(!s.complete) { "The current volume is already complete" }
         require(s.totalChapters in 1..40 && s.scenesPerChapter in 1..8)
+        require(s.volumeIndex in 1..s.totalVolumes && s.totalVolumes in 1..12)
         try {
             while (!s.complete) {
                 coroutineContext.ensureActive()
@@ -242,7 +250,8 @@ class AutonomousNovelEngine(private val context: Context) {
     private suspend fun volumeArc(s: AutoNovelState, engine: InferenceEngine,
                                   sampler: WritingSampling): AutoNovelState {
         val instruction = """
-            PLAN A COMPLETE ORIGINAL VOLUME with ${s.totalChapters} linked chapters, each containing
+            PLAN VOLUME ${s.volumeIndex} OF ${s.totalVolumes} of this ORIGINAL SERIES,
+            with ${s.totalChapters} linked chapters, each containing
             multiple substantial dramatized scenes. You decide all plot beats; do not ask the user.
             Novel: ${s.title} / ${s.series}; premise: ${s.premise}
             Canonical world mechanics: ${s.worldRules}
@@ -251,11 +260,14 @@ class AutonomousNovelEngine(private val context: Context) {
             stakes, hidden information, important choices, relationship shifts, and a satisfying
             but non-trivial volume outcome. Give each numbered chapter its own evolving objective.
             These are PRIVATE planning notes, not reader-facing exposition.
-            Output only the numbered ${s.totalChapters}-chapter volume plan.
+            Begin with VOLUME TITLE: followed by an original title for THIS volume.
+            Then output the numbered ${s.totalChapters}-chapter volume plan.
         """.trimIndent()
         val plan = infer(engine, sampler, instruction, 1536)
         require(plan.length >= 120) { "Volume plan too short to guide a complete novel" }
-        return s.copy(volumeArc = plan, phase = "CHAPTER_PLAN")
+        return s.copy(volumeArc = plan,
+            volume = field(plan, "VOLUME TITLE").ifBlank { s.volume },
+            phase = "CHAPTER_PLAN")
     }
 
     private suspend fun chapterPlan(s: AutoNovelState, engine: InferenceEngine,
@@ -279,8 +291,9 @@ class AutonomousNovelEngine(private val context: Context) {
             s.universe, s.series, s.volume, title, s.premise,
             s.cast, s.worldRules + "\n" + s.storySoFar.takeLast(4000),
             "Follow autonomously generated scene ${s.sceneIndex + 1}",
-            plan, "Autonomous original fiction"
-        , chapterIndex = s.chapterIndex) else requireNotNull(manuscripts.get(s.workspaceId))
+            plan, "Autonomous original fiction",
+            chapterIndex = s.chapterIndex
+        ) else requireNotNull(manuscripts.get(s.workspaceId))
         return s.copy(chapterPlan = plan, phase = "SCENE", workspaceId = w.id, sceneIndex = 0)
     }
 
@@ -352,11 +365,19 @@ class AutonomousNovelEngine(private val context: Context) {
         val memo = infer(engine, sampler, instruction, 750)
         val record = "Chapter ${s.chapterIndex} (provisional; not owner-approved): " +
             memo.take(2100) + "\n"
+        val volumeFinished = s.chapterIndex >= s.totalChapters
+        val seriesFinished = volumeFinished && s.volumeIndex >= s.totalVolumes
         val next = s.copy(
             storySoFar = (s.storySoFar + "\n" + record).takeLast(10500),
-            chapterIndex = s.chapterIndex + 1, sceneIndex = 0,
-            workspaceId = "", chapterPlan = "",
-            phase = if (s.chapterIndex >= s.totalChapters) "COMPLETE" else "CHAPTER_PLAN",
+            chapterIndex = if (volumeFinished) 1 else s.chapterIndex + 1,
+            volumeIndex = if (volumeFinished && !seriesFinished) s.volumeIndex + 1 else s.volumeIndex,
+            sceneIndex = 0, workspaceId = "", chapterPlan = "",
+            volumeArc = if (volumeFinished && !seriesFinished) "" else s.volumeArc,
+            phase = when {
+                seriesFinished -> "COMPLETE"
+                volumeFinished -> "VOLUME_ARC"
+                else -> "CHAPTER_PLAN"
+            },
             lastError = if (quality.any { it.severity.name == "BLOCK" })
                 "Quality warnings on chapter ${s.chapterIndex}: ${quality.map { it.code }.joinToString()}" else ""
         )
