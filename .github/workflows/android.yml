@@ -57,7 +57,7 @@ jobs:
           unzip -l app/build/outputs/apk/debug/*.apk | grep -q 'classes.dex'
       - uses: actions/upload-artifact@v4
         with:
-          name: Asterion-Writing-v0.4.0-Workspace-APK
+          name: Asterion-Writing-v0.5.0-Autonomous-APK
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
