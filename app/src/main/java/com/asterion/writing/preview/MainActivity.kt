@@ -192,6 +192,136 @@ class MainActivity : Activity() {
             else -> resultsPage()
         }
     }
+    private fun autonomousDescription(s: AutoNovelState?): String {
+        if (s == null) return "Ready to create an entirely original novel."
+        val title = s.title.ifBlank { "Inventing an original universe" }
+        val progress = "Chapter ${s.chapterIndex.coerceAtMost(s.totalChapters)}/${s.totalChapters}" +
+            " · Scene ${s.sceneIndex.coerceAtMost(s.scenesPerChapter)}/${s.scenesPerChapter}"
+        val phase = when (s.phase) {
+            "CONCEPT" -> "Inventing universe, cast and central story conflict"
+            "VOLUME_ARC" -> "Building a complete volume arc"
+            "CHAPTER_PLAN" -> "Planning chapter ${s.chapterIndex} automatically"
+            "SCENE" -> "Writing actual prose · $progress"
+            "RECAP" -> "Checking continuity and carrying consequences forward"
+            "COMPLETE" -> "Full first volume generated; chapters are available in Library"
+            else -> "Previous task: ${s.phase}"
+        }
+        return title + "\n" + phase +
+            if (s.lastError.isBlank()) "" else "\nLast stop: " + s.lastError
+    }
+
+    private fun autonomousPage() {
+        group(label("NOVEL AUTOPILOT", 20f, mint, true))
+        group(label("The local AI independently invents the world, characters, relationships, story structure, chapter plans and scenes. No story forms to complete.", 14f, muted))
+        val s = runCatching { AutoNovelStore(this).read() }.getOrElse {
+            group(label("Writing state could not be read: ${it.message}. Existing data was not erased.", 13f, muted))
+            null
+        }
+        group(label("ENGINE", 12f, mint, true))
+        group(label(if (loaded == null) "Model not yet loaded"
+            else loaded!! + (activeAdapter?.let { " + $it" } ?: "") +
+                " · local CPU inference", 13f, if (loaded == null) muted else mint))
+        group(button("Model setup (only needed if none is installed)", { tab = 2; build() }))
+        group(label("AUTONOMOUS PRODUCTION", 13f, mint, true))
+        autonomousStatusView = label(autonomousDescription(s), 15f, white, true)
+        group(autonomousStatusView!!)
+        autonomousProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = (s?.totalChapters ?: 8) * (s?.scenesPerChapter ?: 3)
+            progress = if (s?.complete == true) max
+                else ((s?.chapterIndex ?: 1) - 1) * (s?.scenesPerChapter ?: 3) +
+                    (s?.sceneIndex ?: 0)
+            progressTintList = android.content.res.ColorStateList.valueOf(mint)
+        }
+        group(autonomousProgress!!)
+        if (s == null || s.complete) {
+            group(button(if (s == null) "Create an original novel" else "Create another original novel", {
+                beginAutonomous(create = true)
+            }, true))
+            group(button("Optional: provide a broad creative direction", {
+                val input = field(prefs.getString("autonomous_direction", "") ?: "", 3,
+                    "Optional genre, tone or subject. Leave blank: the AI decides everything.")
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Optional inspiration")
+                    .setView(input)
+                    .setPositiveButton("Save preference") { _, _ ->
+                        prefs.edit().putString("autonomous_direction",
+                            input.text.toString().trim()).apply()
+                        info("Optional direction saved. The novel remains automatically planned and written.")
+                    }.setNegativeButton("Cancel", null).show()
+            }))
+        } else {
+            if (!busy) group(button("Resume autonomous writing", {
+                beginAutonomous(create = false)
+            }, true))
+            if (busy) group(button("Pause after saving current prose", {
+                prefs.edit().putBoolean("autonomous_user_paused", true).apply()
+                generation?.cancel()
+            }))
+            group(label("Generation resumes from the last persisted scene after an interruption; it does not restart the whole novel.", 12f, muted))
+        }
+        group(button("Read generated chapters", { tab = 1; build() }))
+        if (s != null && s.workspaceId.isNotBlank()) {
+            val excerpt = runCatching {
+                WriterWorkspaceStore(this).draft(s.workspaceId).takeLast(1100)
+            }.getOrDefault("")
+            if (excerpt.isNotBlank()) {
+                group(label("LATEST ACTUAL PROSE", 13f, mint, true))
+                group(label(excerpt, 14f, white).apply { setTextIsSelectable(true) })
+            }
+        }
+        group(label("Internally generated continuity notes remain provisional. The app will not silently publish to Nexus or replace approved manuscripts.", 12f, muted))
+        group(button("Advanced testing and manual corrections", { tab = 3; build() }))
+    }
+
+    private fun beginAutonomous(create: Boolean) {
+        if (busy) { info("An operation is already running"); return }
+        try {
+            val writer = AutonomousNovelEngine(this)
+            if (create) writer.newVolume(prefs.getString("autonomous_direction", "") ?: "")
+            else requireNotNull(writer.state()) { "No writing project to resume" }
+            prefs.edit().putBoolean("autonomous_user_paused", false).apply()
+            val active = engine
+            if (active == null || loaded == null) {
+                val localModels = ModelDownloadService.modelsDir(this).listFiles()
+                    ?.filter { it.isFile && it.extension.equals("gguf", true) }.orEmpty()
+                if (localModels.isEmpty()) {
+                    info("A local writing model is required once; import or download it from Models")
+                    tab = 2; build(); return
+                }
+                val preferred = prefs.getString("auto_preferred_model", "") ?: ""
+                val modelFile = localModels.firstOrNull { it.name == preferred }
+                    ?: localModels.minByOrNull { it.length() }!!
+                launchAutonomousAfterModelLoad = true
+                loadModel(modelFile)
+                return
+            }
+            val sampling = WritingSampling.from(prefs)
+            busy = true
+            build()
+            generation = scope.launch {
+                try {
+                    writer.run(active, sampling) { state ->
+                        autonomousStatusView?.text = autonomousDescription(state)
+                        autonomousProgress?.progress =
+                            ((state.chapterIndex - 1) * state.scenesPerChapter +
+                                state.sceneIndex).coerceIn(0,
+                                state.totalChapters * state.scenesPerChapter)
+                    }
+                    info("Autonomous volume created. Open Library to read chapters.")
+                } catch (_: CancellationException) {
+                    info("Autonomous writing paused; chapter checkpoints preserved.")
+                } catch (error: Throwable) {
+                    info("Autonomous writing stopped: ${error.message ?: error.javaClass.simpleName}")
+                } finally {
+                    busy = false
+                    if (!isFinishing) build()
+                }
+            }
+        } catch (error: Throwable) {
+            info("Could not start autonomous novel: ${error.message ?: error.javaClass.simpleName}")
+        }
+    }
+
     private fun writerPage() {
         group(label("MANUAL TESTING & ADVANCED EDITOR", 18f, white, true))
         group(label("Optional diagnostics only. Normal novel creation is fully automatic in Create; none of these fields are required.", 13f, muted))
