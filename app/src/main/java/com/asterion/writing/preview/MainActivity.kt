@@ -101,6 +101,12 @@ class MainActivity : Activity() {
         }
         if (current != null) restoreWorkspace(current)
         build()
+        handler.post {
+            val auto = runCatching { AutoNovelStore(this).read() }.getOrNull()
+            if (auto != null && !auto.complete &&
+                !prefs.getBoolean("autonomous_user_paused", false) &&
+                auto.lastError.isBlank()) beginAutonomous(create = false)
+        }
         handler.post(object: Runnable {
             override fun run() {
                 if (!isFinishing) {
@@ -648,12 +654,22 @@ class MainActivity : Activity() {
                     }
                 }
                 loaded = file.name
+                prefs.edit().putString("auto_preferred_model", file.name).apply()
                 activeAdapter = adapterName.takeIf { it.isNotBlank() }
                 info("Loaded ${file.name}" + (activeAdapter?.let { " with LoRA $it" } ?: "") +
                     " · CPU native engine ready")
                 build()
-            } catch (e: Throwable) { info("Model load failed: ${e.message ?: e.javaClass.simpleName}") }
-            finally { busy = false }
+            } catch (e: Throwable) {
+                launchAutonomousAfterModelLoad = false
+                info("Model load failed: ${e.message ?: e.javaClass.simpleName}")
+            }
+            finally {
+                busy = false
+                if (launchAutonomousAfterModelLoad && engine != null && loaded != null) {
+                    launchAutonomousAfterModelLoad = false
+                    beginAutonomous(create = false)
+                }
+            }
         }
     }
     private fun unloadModel() {
