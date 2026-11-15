@@ -176,9 +176,28 @@ def main():
     p.add_argument("--backup-dir", type=Path, default=Path.home() / "Downloads" / "AsterionWriterModelRescue")
     p.add_argument("--list", action="store_true")
     p.add_argument("--backup-only", action="store_true")
+    p.add_argument("--restore-only", action="store_true", help="Restore verified backups after a signature-changing same-package reinstall")
     args = p.parse_args()
 
     check_connection(args.adb)
+    if args.backup_only and args.restore_only:
+        raise ValueError("--backup-only and --restore-only cannot be combined")
+    if args.restore_only:
+        app_access(args.adb, args.target)
+        if not args.backup_dir.is_dir():
+            raise RuntimeError("Verified model backup directory is missing; no import attempted")
+        backups = sorted(p for p in args.backup_dir.iterdir()
+                         if p.is_file() and not p.is_symlink() and SAFE_NAME.fullmatch(p.name))
+        if not backups:
+            raise RuntimeError("No verified GGUF backup files were found")
+        for file in backups:
+            digest = file_digest(file)
+            if file.stat().st_size < 4096:
+                raise RuntimeError("A backup is too small to be a real GGUF")
+            print(json.dumps({"model": file.name, "restore_from_backup_sha256": digest}), flush=True)
+            import_model(args.adb, args.target, file, digest)
+        print("VERIFIED_MODEL_RESTORE_COMPLETE; BACKUPS_PRESERVED", flush=True)
+        return
     app_access(args.adb, args.source)
     names = model_names(args.adb, args.source)
     if not names:
