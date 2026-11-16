@@ -119,7 +119,7 @@ public final class AsterionControlBridgeProvider extends ContentProvider {
             .put("models_available_verified", false)
             .put("private_files_read", false)
             .put("supported_actions",
-                new JSONArray().put("status").put("diagnostics.summary").put("capabilities"));
+                new JSONArray().put("status").put("diagnostics.summary").put("capabilities").put("models.status"));
         JSONArray exits = new JSONArray();
         if (Build.VERSION.SDK_INT >= 30) {
             ActivityManager manager =
@@ -138,6 +138,35 @@ public final class AsterionControlBridgeProvider extends ContentProvider {
         }
         return evidence.put("android_historical_exits", exits)
             .put("android_historical_exits_count", exits.length());
+    }
+
+    private JSONObject actualModels() throws Exception {
+        java.io.File root = new java.io.File(context().getFilesDir(), "models");
+        JSONArray models = new JSONArray();
+        long bytes = 0L;
+        int count = 0;
+        java.io.File[] installed = root.isDirectory() ? root.listFiles() : null;
+        if (installed != null) {
+            for (java.io.File file : installed) {
+                if (!file.isFile() || !file.getName().toLowerCase(Locale.US).endsWith(".gguf"))
+                    continue; // Partial downloads are NEVER reported as installed.
+                if (file.length() < 1024L * 1024L) continue;
+                count++;
+                bytes += file.length();
+                if (models.length() < 12) {
+                    models.put(new JSONObject().put("name", file.getName())
+                        .put("bytes", file.length()));
+                }
+            }
+        }
+        return new JSONObject().put("model_storage", "writer_private_models")
+            .put("installed_gguf_count", count)
+            .put("installed_bytes", bytes)
+            .put("models", models)
+            .put("model_loaded_verified", false)
+            .put("inference_available_to_control", false)
+            .put("model_download_active_verified", false)
+            .put("verification", "completed file names and sizes only; native inference not exercised");
     }
 
     private static Bundle reply(JSONObject result) {
@@ -171,7 +200,7 @@ public final class AsterionControlBridgeProvider extends ContentProvider {
             throw new SecurityException("Unknown bridge method");
         String action = extras.getString("action", "");
         if (!("status".equals(action) || "capabilities".equals(action) ||
-              "diagnostics.summary".equals(action)))
+              "diagnostics.summary".equals(action) || "models.status".equals(action)))
             return reply(new JSONObjectBuilder().put("ok", false)
                 .put("status", "rejected")
                 .put("reason", "This partner bridge is read-only; action unsupported")
@@ -186,7 +215,7 @@ public final class AsterionControlBridgeProvider extends ContentProvider {
         if (existing.isEmpty() && !receipts.edit().putString(key, action).commit())
             throw new IllegalStateException("Cannot persist read receipt");
         try {
-            JSONObject result = processEvidence();
+            JSONObject result = "models.status".equals(action) ? actualModels() : processEvidence();
             if ("capabilities".equals(action))
                 result.put("capability_type", "read_only_process_and_exit_evidence");
             return reply(new JSONObjectBuilder().put("ok", true)
